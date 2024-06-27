@@ -564,11 +564,8 @@ class LdapShell(cmd.Cmd):
                         print(userpass)
                     except:
                         continue
-            else:
-                 print("Target not found, maybe add the $?")
-                
+                        
         elif target != "":
-            print("Dumping %s gMSA password" % target)
             try:
                success = self.client.search(self.domain_dumper.root, '(sAMAccountName=%s)' % escape_filter_chars(target), attributes=['sAMAccountName','msDS-ManagedPassword'])
                if success:
@@ -581,11 +578,12 @@ class LdapShell(cmd.Cmd):
                        hash.update (blob['CurrentPassword'][:-2])
                        passwd = binascii.hexlify(hash.digest()).decode("utf-8")
                        userpass = sam + ':::' + passwd
+                       print("Dumping %s gMSA password" % target)
                        print(userpass)
             except:
-                pass  
+                  print("Target not found, forgot the $?")
         else:
-            print("Expected target name ending with $")  
+            print("Expected target name ending with $") 
     
     def do_grant_control(self, line):
         args = shlex.split(line)
