@@ -1,7 +1,9 @@
 #!/usr/bin/env python
 # Impacket - Collection of Python classes for working with network protocols.
 #
-# Copyright (C) 2023 Fortra. All rights reserved.
+# Copyright Fortra, LLC and its affiliated companies 
+#
+# All rights reserved.
 #
 # This software is provided under a slightly modified version
 # of the Apache Software License. See the accompanying LICENSE file
@@ -28,19 +30,18 @@ from impacket import version, tds
 
 
 if __name__ == '__main__':
-    # Init the example's logger theme
-    logger.init()
     print(version.BANNER)
 
     parser = argparse.ArgumentParser(add_help = True, description = "TDS client implementation (SSL supported).")
 
     parser.add_argument('target', action='store', help='[[domain/]username[:password]@]<targetName or address>')
-    parser.add_argument('-port', action='store', default='1433', help='target MSSQL port (default 1433)')
     parser.add_argument('-db', action='store', help='MSSQL database instance (default None)')
     parser.add_argument('-windows-auth', action='store_true', default=False, help='whether or not to use Windows '
                                                                                   'Authentication (default False)')
     parser.add_argument('-debug', action='store_true', help='Turn DEBUG output ON')
+    parser.add_argument('-ts', action='store_true', help='Adds timestamp to every logging output')
     parser.add_argument('-show', action='store_true', help='show the queries')
+    parser.add_argument('-command', action='extend', nargs='*', help='Commands to execute in the SQL shell. Multiple commands can be passed.')
     parser.add_argument('-file', type=argparse.FileType('r'), help='input file with commands to execute in the SQL shell')
 
     group = parser.add_argument_group('authentication')
@@ -52,23 +53,26 @@ if __name__ == '__main__':
                        'ones specified in the command line')
     group.add_argument('-aesKey', action="store", metavar = "hex key", help='AES key to use for Kerberos Authentication '
                                                                             '(128 or 256 bits)')
+
+    group = parser.add_argument_group('connection')
+
     group.add_argument('-dc-ip', action='store',metavar = "ip address",  help='IP Address of the domain controller. If '
                        'ommited it use the domain part (FQDN) specified in the target parameter')
+    group.add_argument('-target-ip', action='store', metavar = "ip address",
+                       help='IP Address of the target machine. If omitted it will use whatever was specified as target. '
+                            'This is useful when target is the NetBIOS name and you cannot resolve it')
+    group.add_argument('-port', action='store', default='1433', help='target MSSQL port (default 1433)')
+
 
     if len(sys.argv)==1:
         parser.print_help()
         sys.exit(1)
 
     options = parser.parse_args()
+    # Init the example's logger theme
+    logger.init(options.ts, options.debug)
 
-    if options.debug is True:
-        logging.getLogger().setLevel(logging.DEBUG)
-        # Print the Library's installation path
-        logging.debug(version.getInstallationPath())
-    else:
-        logging.getLogger().setLevel(logging.INFO)
-
-    domain, username, password, address = parse_target(options.target)
+    domain, username, password, remoteName = parse_target(options.target)
 
     if domain is None:
         domain = ''
@@ -77,10 +81,13 @@ if __name__ == '__main__':
         from getpass import getpass
         password = getpass("Password:")
 
+    if options.target_ip is None:
+        options.target_ip = remoteName
+
     if options.aesKey is not None:
         options.k = True
 
-    ms_sql = tds.MSSQL(address, int(options.port))
+    ms_sql = tds.MSSQL(options.target_ip, int(options.port), remoteName)
     ms_sql.connect()
     try:
         if options.k is True:
@@ -95,10 +102,14 @@ if __name__ == '__main__':
         res = False
     if res is True:
         shell = SQLSHELL(ms_sql, options.show)
-        if options.file is None:
-            shell.cmdloop()
-        else:
+        if options.file:
             for line in options.file.readlines():
                 print("SQL> %s" % line, end=' ')
                 shell.onecmd(line)
+        elif options.command:
+            for c in options.command:
+                print("SQL> %s" % c)
+                shell.onecmd(c)
+        else:
+            shell.cmdloop()
     ms_sql.disconnect()

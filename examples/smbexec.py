@@ -1,7 +1,9 @@
 #!/usr/bin/env python
 # Impacket - Collection of Python classes for working with network protocols.
 #
-# Copyright (C) 2023 Fortra. All rights reserved.
+# Copyright Fortra, LLC and its affiliated companies 
+#
+# All rights reserved.
 #
 # This software is provided under a slightly modified version
 # of the Apache Software License. See the accompanying LICENSE file
@@ -9,7 +11,7 @@
 #
 # Description:
 #   A similar approach to psexec w/o using RemComSvc. The technique is described here
-#   https://www.optiv.com/blog/owning-computers-without-shell-access
+#   https://web.archive.org/web/20190515131124/https://www.optiv.com/blog/owning-computers-without-shell-access
 #   Our implementation goes one step further, instantiating a local smbserver to receive the
 #   output of the commands. This is useful in the situation where the target machine does NOT
 #   have a writeable share available.
@@ -54,7 +56,7 @@ from impacket import version, smbserver
 from impacket.dcerpc.v5 import transport, scmr
 from impacket.krb5.keytab import Keytab
 
-OUTPUT_FILENAME = '__output'
+OUTPUT_FILENAME = '__output_' + ''.join([random.choice(string.ascii_letters) for i in range(8)])
 SMBSERVER_DIR   = '__tmp'
 DUMMY_SHARE     = 'TMP'
 CODEC = sys.stdout.encoding
@@ -66,10 +68,6 @@ class SMBServer(Thread):
 
     def cleanup_server(self):
         logging.info('Cleaning up..')
-        try:
-            os.unlink(SMBSERVER_DIR + '/smb.log')
-        except OSError:
-            pass
         os.rmdir(SMBSERVER_DIR)
 
     def run(self):
@@ -79,7 +77,7 @@ class SMBServer(Thread):
         smbConfig.set('global','server_name','server_name')
         smbConfig.set('global','server_os','UNIX')
         smbConfig.set('global','server_domain','WORKGROUP')
-        smbConfig.set('global','log_file',SMBSERVER_DIR + '/smb.log')
+        smbConfig.set('global','log_file','None')
         smbConfig.set('global','credentials_file','')
 
         # Let's add a dummy share
@@ -369,20 +367,13 @@ if __name__ == '__main__':
     options = parser.parse_args()
 
     # Init the example's logger theme
-    logger.init(options.ts)
+    logger.init(options.ts, options.debug)
 
     if options.codec is not None:
         CODEC = options.codec
     else:
         if CODEC is None:
             CODEC = 'utf-8'
-
-    if options.debug is True:
-        logging.getLogger().setLevel(logging.DEBUG)
-        # Print the Library's installation path
-        logging.debug(version.getInstallationPath())
-    else:
-        logging.getLogger().setLevel(logging.INFO)
 
     domain, username, password, remoteName = parse_target(options.target)
 

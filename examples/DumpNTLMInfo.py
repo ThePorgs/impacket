@@ -1,7 +1,9 @@
 #!/usr/bin/env python
 # Impacket - Collection of Python classes for working with network protocols.
 #
-# Copyright (C) 2023 Fortra. All rights reserved.
+# Copyright Fortra, LLC and its affiliated companies 
+#
+# All rights reserved.
 #
 # This software is provided under a slightly modified version
 # of the Apache Software License. See the accompanying LICENSE file
@@ -479,16 +481,17 @@ class SmbConnection:
 
 
 class DumpNtlm:
-    def __init__(self, ip, hostname, port) -> None:
+    def __init__(self, ip, hostname, port, protocol) -> None:
         self.target     = ip
         self.hostname   = hostname
         self._sess_port = int(port)
+        self._protocol  = protocol
         self._timeout   = 60
 
     def DisplayInfo(self):
-        if self._sess_port in [139, 445]:
+        if self._protocol == 'SMB':
             self.DisplaySmbInfo()
-        elif  self._sess_port in [135]:
+        elif self._protocol == 'RPC':
             self.DisplayRpcInfo()
 
     def DisplayRpcInfo(self):
@@ -628,34 +631,42 @@ class DumpNtlm:
 if __name__ == '__main__':
 
     print(version.BANNER)
-    logger.init()
 
     parser = argparse.ArgumentParser(add_help = True, description = "Do ntlm authentication and parse information.")
     parser.add_argument('target', action='store', help='<targetName or address>')
     parser.add_argument('-debug', action='store_true', help='Turn DEBUG output ON')
+    parser.add_argument('-ts', action='store_true', help='Adds timestamp to every logging output')
     parser.add_argument('-target-ip', action='store', metavar="ip address",
                        help='IP Address of the target machine. If omitted it will use whatever was specified as target. '
                             'This is useful when target is the NetBIOS name and you cannot resolve it')
-    parser.add_argument('-port', choices=['135', '139', '445'], nargs='?', default='445', metavar="destination port",
-                       help='Destination port to connect to SMB/RPC Server')
+    parser.add_argument('-port', type=int, default=445, metavar="destination port",
+                    help='Destination port to connect to SMB/RPC Server')
+    parser.add_argument('-protocol', choices=['SMB', 'RPC'], nargs='?', metavar="protocol",
+                        help='Protocol to use (SMB or RPC). Default is SMB, port 135 uses RPC normally.')
 
     if len(sys.argv) == 1:
         parser.print_help()
         sys.exit(1)
 
     options = parser.parse_args()
+    logger.init(options.ts, options.debug)
 
-    if options.debug is True:
-        logging.getLogger().setLevel(logging.DEBUG)
-        logging.debug(version.getInstallationPath())
-    else:
-        logging.getLogger().setLevel(logging.INFO)
+    if options.port == 135:
+        if not options.protocol:
+            options.protocol = 'RPC'
+            logging.info("Port 135 specified; using RPC protocol by default. Use `-protocol SMB` to force SMB protocol.")
+        elif options.protocol == 'SMB':
+            logging.info("Port 135 specified with SMB protocol. Are you sure you don't want `-protocol RPC`?")
+    elif not options.protocol:
+        options.protocol = 'SMB'
+        logging.info("Defaulting to SMB protocol.")
 
     try:
         if options.target_ip is not None:
-            dumper = DumpNtlm(options.target_ip, options.target, int(options.port))
+            dumper = DumpNtlm(options.target_ip, options.target, int(options.port), options.protocol)
         else:
-            dumper = DumpNtlm(options.target, options.target, int(options.port))
+            dumper = DumpNtlm(options.target, options.target, int(options.port), options.protocol)
+        logging.info("Using target: %s, IP: %s, Port: %d, Protocol: %s" % (options.target, options.target_ip or options.target, options.port, options.protocol) )
         dumper.DisplayInfo()
     except Exception as e:
         if logging.getLogger().level == logging.DEBUG:
