@@ -982,7 +982,7 @@ class MS14_068:
                 authTime = encASRepPart['authtime']
 
                 serverName = Principal('krbtgt/%s' % self.__domain.upper(),
-                                       type=constants.PrincipalNameType.NT_PRINCIPAL.value)
+                                       type=constants.PrincipalNameType.NT_SRV_INST.value)
                 tgs, cipher, oldSessionKey, sessionKey = self.getKerberosTGS(serverName, domain, self.__kdcHost, tgt,
                                                                              cipher, sessionKey, authTime)
 
@@ -1113,20 +1113,13 @@ if __name__ == '__main__':
     options = parser.parse_args()
 
     # Init the example's logger theme
-    logger.init(options.ts)
+    logger.init(options.ts, options.debug)
 
     domain, username, password, address = parse_target(options.target)
 
     if domain == '':
         logging.critical('Domain should be specified!')
         sys.exit(1)
-
-    if options.debug is True:
-        logging.getLogger().setLevel(logging.DEBUG)
-        # Print the Library's installation path
-        logging.debug(version.getInstallationPath())
-    else:
-        logging.getLogger().setLevel(logging.INFO)
 
     if password == '' and username != '' and options.hashes is None:
         from getpass import getpass

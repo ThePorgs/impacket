@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # Impacket - Collection of Python classes for working with network protocols.
 #
-# Copyright Fortra, LLC and its affiliated companies 
+# Copyright Fortra, LLC and its affiliated companies
 #
 # All rights reserved.
 #
@@ -126,15 +126,13 @@ from getpass import getpass
 
 from impacket import version
 from impacket.dcerpc.v5 import transport, samr, epm
-from impacket.krb5 import kpasswd
+from impacket.krb5 import kerberosv5, kpasswd
 from impacket.ldap import ldap, ldapasn1
 
 from impacket.examples import logger
-from impacket.examples.utils import parse_target
+from impacket.examples.utils import parse_target, EMPTY_LM_HASH
 
-
-EMPTY_LM_HASH = "aad3b435b51404eeaad3b435b51404ee"
-
+import OpenSSL
 
 class PasswordHandler:
     """Generic interface for all the password protocols supported by this script"""
@@ -287,12 +285,12 @@ class KPassword(PasswordHandler):
                 aesKey=self.aesKey,
                 kdcHost=self.kdcHost,
             )
-        except kpasswd.KPasswdError as e:
+        except (kerberosv5.KerberosError, kpasswd.KPasswdError) as e:
             logging.error(f"Password not changed: {e}")
             return False
-        else:
-            logging.info("Password was changed successfully.")
-            return True
+
+        logging.info("Password was changed successfully.")
+        return True
 
     def _setPassword(self, targetUsername, targetDomain, newPassword, newPwdHashLM, newPwdHashNT):
         if not newPassword:
@@ -312,10 +310,12 @@ class KPassword(PasswordHandler):
                 aesKey=self.aesKey,
                 kdcHost=self.kdcHost,
             )
-        except kpasswd.KPasswdError as e:
+        except (kerberosv5.KerberosError, kpasswd.KPasswdError) as e:
             logging.error(f"Password not changed for {targetDomain}\\{targetUsername}: {e}")
-        else:
-            logging.info(f"Password was set successfully for {targetDomain}\\{targetUsername}.")
+            return False
+
+        logging.info(f"Password was set successfully for {targetDomain}\\{targetUsername}.")
+        return True
 
 
 class SamrPassword(PasswordHandler):
@@ -414,6 +414,10 @@ class SamrPassword(PasswordHandler):
                 )
                 logging.debug(str(e))
                 return False
+            elif "STATUS_ACCOUNT_DISABLED" in str(e):
+                logging.critical("The account is currently disabled.")
+                logging.debug(str(e))
+                return False
             else:
                 raise e
 
@@ -440,6 +444,10 @@ class SamrPassword(PasswordHandler):
                     "Our anonymous session cannot get a handle to the target user. "
                     "Retry with a user whose password is not expired."
                 )
+                logging.debug(str(e))
+                return False
+            elif "STATUS_ACCESS_DENIED" in str(e):
+                logging.critical("Access denied")
                 logging.debug(str(e))
                 return False
             else:
@@ -541,7 +549,7 @@ class SamrPassword(PasswordHandler):
                 targetUsername, oldPassword, "", oldPwdHashLM, oldPwdHashNT, newPwdHashLM, newPwdHashNT
             )
             if res:
-                logging.warning("User will need to change their password on next logging because we are using hashes.")
+                logging.warning("User might need to change their password at next logon because we set hashes (unless password never expires is set).")
             return res
 
     def _setPassword(self, targetUsername, targetDomain, newPassword, newPwdHashLM, newPwdHashNT):
@@ -569,7 +577,7 @@ class RpcPassword(SamrPassword):
             logging.warning(
                 "MS-RPC transport requires new password in plaintext in default Active Directory configuration. Trying anyway."
             )
-        super()._changePassword(
+        return super()._changePassword(
             targetUsername, targetDomain, oldPassword, newPassword, oldPwdHashLM, oldPwdHashNT, newPwdHashLM, newPwdHashNT
         )
 
@@ -577,7 +585,7 @@ class RpcPassword(SamrPassword):
         logging.warning(
             "MS-RPC transport does not allow password reset in default Active Directory configuration. Trying anyway."
         )
-        super()._setPassword(targetUsername, targetDomain, newPassword, newPwdHashLM, newPwdHashNT)
+        return super()._setPassword(targetUsername, targetDomain, newPassword, newPwdHashLM, newPwdHashNT)
 
 
 class SmbPassword(SamrPassword):
@@ -615,7 +623,7 @@ class LdapPassword(PasswordHandler):
                     self.aesKey,
                     kdcHost=self.kdcHost,
                 )
-        except ldap.LDAPSessionError as e:
+        except (ldap.LDAPSessionError, OpenSSL.SSL.SysCallError) as e:
             logging.error(f"Cannot connect to {ldapURI} as {self.domain}\\{self.username}: {e}")
             return False
 
@@ -718,6 +726,56 @@ class LdapPassword(PasswordHandler):
         newPasswordEncoded = self.encodeLdapPassword(newPassword)
         return self._modifyPassword(True, targetUsername, targetDomain, oldPasswordEncoded, newPasswordEncoded)
 
+    def unlockAccount(self, targetUsername, targetDomain):
+        """
+        unlock account of a user
+
+        Must send a modify operation (must have privileges).
+        """
+
+        if not targetUsername:
+            logging.critical("LDAP requires the target username")
+            return False
+
+        if not self.connect(targetDomain):
+            return False
+
+        targetDN = self.findTargetDN(targetUsername, targetDomain)
+        if not targetDN:
+            logging.critical("Could not find the target user in LDAP")
+            return False
+
+        logging.debug(f"Found target distinguishedName: {targetDN}")
+
+        # Build our Modify request
+        request = ldapasn1.ModifyRequest()
+        request["object"] = targetDN
+
+        request["changes"][0]["operation"] = ldapasn1.Operation("replace")
+        request["changes"][0]["modification"]["type"] = "lockoutTime"
+        request["changes"][0]["modification"]["vals"][0] = '0'
+
+        logging.debug(f"Sending: {str(request)}")
+
+        response = self.ldapConnection.sendReceive(request)[0]
+
+        logging.debug(f"Receiving: {str(response)}")
+
+        resultCode = int(response["protocolOp"]["modifyResponse"]["resultCode"])
+        result = str(ldapasn1.ResultCode(resultCode))
+        diagMessage = str(response["protocolOp"]["modifyResponse"]["diagnosticMessage"])
+
+        if result == "success":
+            logging.info(f"Account unlocked successfully: {targetDN}")
+            return True
+        elif result == "insufficientAccessRights":
+            logging.error(f"Could not unlock {targetDN}, {self.domain}\\{self.username} has insufficient rights")
+        else:
+            logging.error(f"Could not unlock {targetDN}. {result}: {diagMessage}")
+
+        return False
+
+
     def _setPassword(self, targetUsername, targetDomain, newPassword, newPwdHashLM, newPwdHashNT):
         """
         Set the password of a user.
@@ -731,16 +789,6 @@ class LdapPassword(PasswordHandler):
 
         newPasswordEncoded = self.encodeLdapPassword(newPassword)
         return self._modifyPassword(False, targetUsername, targetDomain, None, newPasswordEncoded)
-
-
-def init_logger(options):
-    logger.init(options.ts)
-    if options.debug is True:
-        logging.getLogger().setLevel(logging.DEBUG)
-        logging.debug(version.getInstallationPath())
-    else:
-        logging.getLogger().setLevel(logging.INFO)
-
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -791,6 +839,11 @@ def parse_args():
         ),
     )
     group.add_argument(
+        "-unlock",
+        action="store_true",
+        help="Try to unlock the account (requires -altuser and (-altpass or -althash))",
+    )
+    group.add_argument(
         "-reset",
         "-admin",
         action="store_true",
@@ -832,7 +885,7 @@ if __name__ == "__main__":
     print(version.BANNER)
 
     options = parse_args()
-    init_logger(options)
+    logger.init(options.ts, options.debug)
 
     handlers = {
         "kpasswd": KPassword,
@@ -841,13 +894,14 @@ if __name__ == "__main__":
         "ldap": LdapPassword,
     }
 
+
     try:
-        PasswordProtocol = handlers[options.protocol]
+        PasswordProtocol = handlers[options.protocol if not options.unlock else "ldap"]
     except KeyError:
         logging.critical(f"Unsupported password protocol {options.protocol}")
         sys.exit(1)
 
-    # Parse account whose password is changed
+    # Parse account whose password is changed or unlocked
     targetDomain, targetUsername, oldPassword, address = parse_target(options.target)
 
     if not targetDomain:
@@ -866,13 +920,18 @@ if __name__ == "__main__":
         oldPwdHashLM = ""
         oldPwdHashNT = ""
 
-    if oldPassword == "" and oldPwdHashNT == "":
+    if oldPassword == "" and oldPwdHashNT == "" and not options.unlock:
         if options.reset:
             pass  # no need for old one when we reset
         elif options.no_pass:
             logging.info("Current password not given: will use KRB5CCNAME")
         else:
-            oldPassword = getpass("Current password: ")
+            try:
+                oldPassword = getpass("Current password: ")
+            except KeyboardInterrupt:
+                print()
+                logging.warning("Cancelled")
+                sys.exit(130)
 
     if options.newhashes is not None:
         newPassword = ""
@@ -886,11 +945,16 @@ if __name__ == "__main__":
     else:
         newPwdHashLM = ""
         newPwdHashNT = ""
-        if options.newpass is None:
-            newPassword = getpass("New password: ")
-            if newPassword != getpass("Retype new password: "):
-                logging.critical("Passwords do not match, try again.")
-                sys.exit(1)
+        if options.newpass is None and options.unlock is False:
+            try:
+                newPassword = getpass("New password: ")
+                if newPassword != getpass("Retype new password: "):
+                    logging.critical("Passwords do not match, try again.")
+                    sys.exit(1)
+            except KeyboardInterrupt:
+                print()
+                logging.warning("Cancelled")
+                sys.exit(130)
         else:
             newPassword = options.newpass
 
@@ -949,7 +1013,12 @@ if __name__ == "__main__":
 
     # Attempt the password change/reset
     if options.reset:
-        handler.setPassword(targetUsername, targetDomain, newPassword, newPwdHashLM, newPwdHashNT)
+        ret = handler.setPassword(targetUsername, targetDomain, newPassword, newPwdHashLM, newPwdHashNT)
+    elif options.unlock:
+        if not options.altuser or (not options.altpass and not options.althash):
+            logging.critical("You must specify an altuser and an althash or altpass to use unlock")
+            sys.exit(1)
+        ret = handler.unlockAccount(targetUsername, targetDomain)
     else:
         if (authDomain, authUsername) != (targetDomain, targetUsername):
             logging.warning(
@@ -957,6 +1026,11 @@ if __name__ == "__main__":
                 "You may want to use '-reset' to *reset* the password of the target."
             )
 
-        handler.changePassword(
+        ret = handler.changePassword(
             targetUsername, targetDomain, oldPassword, newPassword, oldPwdHashLM, oldPwdHashNT, newPwdHashLM, newPwdHashNT
         )
+
+    if ret:
+        sys.exit(0)
+    else:
+        sys.exit(1)

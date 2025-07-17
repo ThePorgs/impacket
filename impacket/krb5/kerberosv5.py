@@ -1,6 +1,6 @@
 # Impacket - Collection of Python classes for working with network protocols.
 #
-# Copyright Fortra, LLC and its affiliated companies 
+# Copyright Fortra, LLC and its affiliated companies
 #
 # All rights reserved.
 #
@@ -123,9 +123,9 @@ def getKerberosTGT(clientName, password, domain, lmhash, nthash, aesKey='', kdcH
     domain = domain.upper()
 
     if serverName is None:
-        serverName = Principal('krbtgt/%s'%domain, type=constants.PrincipalNameType.NT_PRINCIPAL.value)
+        serverName = Principal('krbtgt/%s'%domain, type=constants.PrincipalNameType.NT_SRV_INST.value)
     else:
-        serverName = Principal(serverName, type=constants.PrincipalNameType.NT_PRINCIPAL.value)
+        serverName = Principal(serverName, type=constants.PrincipalNameType.NT_SRV_INST.value)
 
     pacRequest = KERB_PA_PAC_REQUEST()
     pacRequest['include-pac'] = requestPAC
@@ -728,8 +728,8 @@ class KerberosError(SessionError):
                 nt_error = struct.unpack('<L', eData['data-value'].asOctets()[:4])[0]
 
                 if nt_error in nt_errors.ERROR_MESSAGES:
-                    error_msg_short = nt_errors.ERROR_MESSAGES[nt_error][0] 
-                    error_msg_verbose = nt_errors.ERROR_MESSAGES[nt_error][1] 
+                    error_msg_short = nt_errors.ERROR_MESSAGES[nt_error][0]
+                    error_msg_verbose = nt_errors.ERROR_MESSAGES[nt_error][1]
                     retString += '\nNT ERROR: code: 0x%x - %s - %s' % (nt_error, error_msg_short, error_msg_verbose)
                 else:
                     retString += '\nNT ERROR: unknown error code: 0x%x' % nt_error

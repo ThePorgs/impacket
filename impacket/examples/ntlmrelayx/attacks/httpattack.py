@@ -1,6 +1,6 @@
 # Impacket - Collection of Python classes for working with network protocols.
 #
-# Copyright Fortra, LLC and its affiliated companies 
+# Copyright Fortra, LLC and its affiliated companies
 #
 # All rights reserved.
 #
@@ -19,6 +19,7 @@
 
 from impacket.examples.ntlmrelayx.attacks import ProtocolAttack
 from impacket.examples.ntlmrelayx.attacks.httpattacks.adcsattack import ADCSAttack
+from impacket.examples.ntlmrelayx.attacks.httpattacks.adminserviceattack import ADMINSERVICEAttack
 from impacket.examples.ntlmrelayx.attacks.httpattacks.sccmpoliciesattack import SCCMPoliciesAttack
 from impacket.examples.ntlmrelayx.attacks.httpattacks.sccmdpattack import SCCMDPAttack
 
@@ -40,6 +41,8 @@ class HTTPAttack(ProtocolAttack, ADCSAttack, SCCMPoliciesAttack, SCCMDPAttack):
 
         if self.config.isADCSAttack:
             ADCSAttack._run(self)
+        elif self.config.isADMINAttack:
+            ADMINSERVICEAttack._run(self)
         elif self.config.isSCCMPoliciesAttack:
             SCCMPoliciesAttack._run(self)
         elif self.config.isSCCMDPAttack:

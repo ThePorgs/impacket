@@ -1,6 +1,6 @@
 # Impacket - Collection of Python classes for working with network protocols.
 #
-# Copyright Fortra, LLC and its affiliated companies 
+# Copyright Fortra, LLC and its affiliated companies
 #
 # All rights reserved.
 #
@@ -64,6 +64,7 @@ from collections import OrderedDict
 from datetime import datetime, timedelta, timezone
 from struct import unpack, pack
 from six import b, PY2
+from base64 import b64encode
 
 from impacket import LOG
 from impacket import system_errors
@@ -162,7 +163,7 @@ class DOMAIN_ACCOUNT_F(Structure):
         ('MaxPasswordAge','<Q=0'),
         ('MinPasswordAge','<Q=0'),
         ('ForceLogoff','<Q=0'),
-        ('LockoutDuration','<Q=0'),
+        ('LockoutDuration','<q=0'),
         ('LockoutObservationWindow','<Q=0'),
         ('ModifiedCountAtLastPromotion','<Q=0'),
         ('NextRid','<L=0'),
@@ -179,6 +180,40 @@ class DOMAIN_ACCOUNT_F(Structure):
 # Commenting this, not needed and not present on Windows 2000 SP0
 #        ('Key1',':', SAM_KEY_DATA),
 #        ('Unknown4','<L=0'),
+    )
+
+class DOMAIN_ACCOUNT_V(Structure):
+    structure = (
+        ('Randomstuffforfun','<L=0'),
+        ('SystemSid', ':', lambda data: data[-12:]),
+        ('Data',':'),
+    )
+
+class USER_ACCOUNT_C(Structure):
+    structure = (
+        ('GroupNumber','<L=0'),
+        ('Unknown','436s=b""'),
+        ('GroupMembers',':'),
+    )
+
+class USER_ACCOUNT_F(Structure):
+    structure = (
+        ('Unknown','8s=b""'),
+        ('LastLogonTimestamp','8s=b""'),
+        ('Unknown2','8s=b""'),
+        ('PasswordLastSetTimeStamp','8s=b""'),
+        ('AccountExpiresTimeStamp','8s=b""'),
+        ('LastIncorrectPasswordTimestamp','8s=b""'),
+        ('UserNumber','<L=0'),
+        ('Unknown3','<L=0'),
+        ('GroupedData','H=0'),
+        ('Unknown4','<H=0'),
+        ('CountryCode','<H=0'),
+        ('Unknown5','<H=0'),
+        ('InvalidPWDCount','<H=0'),
+        ('NumberOfLogons','<H=0'),
+        ('Unknown6','<L=0'),
+        ('Unknown7','8s=b""')
     )
 
 # Great help from here https://web.archive.org/web/20190717124313/http://www.beginningtoseethelight.org/ntsecurity/index.htm
@@ -225,6 +260,21 @@ class USER_ACCOUNT_V(Structure):
         ('Unknown14','<L=0'),
         ('Unknown15','24s=b""'),
         ('Data',':=b""'),
+    )
+
+class BUILTIN_GROUP_C(Structure):
+    structure = (
+        ('Unknown1', '<16s=b""'),  # First 16 bytes of unknown data
+        ('NameOffset', '<L=0'),    # Offset for the group name
+        ('NameLength', '<L=0'),    # Length of the group name
+        ('Unknown2', '<L=0'),      # Padding or unused data
+        ('CommentOffset', '<L=0'), # Offset for the group comment
+        ('CommentLength', '<L=0'), # Length of the group comment
+        ('Unknown3', '<L=0'),      # Padding or unused data
+        ('UsersOffset', '<L=0'),   # Offset for users
+        ('Unknown4', '<L=0'),      # Padding or unused data
+        ('UserCount', '<L=0'),     # Number of users
+        ('Data', ':'),             # Remaining data
     )
 
 class NL_RECORD(Structure):
@@ -1340,14 +1390,46 @@ class OfflineRegistry:
             self.__registryHive.close()
 
 class SAMHashes(OfflineRegistry):
-    def __init__(self, samFile, bootKey, isRemote = False, perSecretCallback = lambda secret: _print_helper(secret)):
+    def __init__(self, samFile, bootKey, isRemote = False, printUserStatus=False, perSecretCallback = lambda secret: _print_helper(secret)):
         OfflineRegistry.__init__(self, samFile, isRemote)
         self.__samFile = samFile
         self.__hashedBootKey = b''
         self.__bootKey = bootKey
+        self.__printUserStatus = printUserStatus
         self.__cryptoCommon = CryptoCommon()
         self.__itemsFound = {}
         self.__perSecretCallback = perSecretCallback
+
+    def binary_to_sid(self, binary_data, without_prefix=False):
+        if len(binary_data) < 12:
+            return ""
+
+        if len(binary_data) == 12:
+            if not without_prefix:
+                rev = binary_data[0]
+                authid = hexlify(binary_data[2:8]).decode().lstrip("0")
+                sub = unpack("<L", binary_data[8:12])[0]
+                return f"S-{rev}-{authid}-{sub}"
+            else:
+                sections = [binary_data[i:i + 4][::-1] for i in range(0, 12, 4)]
+                decimals = [int.from_bytes(section, byteorder='big') for section in sections]
+                return f"S-1-5-21-{decimals[0]}-{decimals[1]}-{decimals[2]}"
+
+        if len(binary_data) > 12:
+            rev = binary_data[0]
+            authid = hexlify(binary_data[2:8]).decode().lstrip("0")
+            sub = "-".join(map(str, unpack("<LLLL", binary_data[8:24])))
+            rid = unpack("<L", binary_data[24:28])[0]
+            return f"S-{rev}-{authid}-{sub}-{rid}"
+
+        return ""
+
+    def nt_time_to_datetime(self, nt_time):
+        # NT Time is in 100-nanosecond intervals since 1601-01-01 (UTC)
+        # The difference between 1601 and 1970 is 11644473600 seconds
+        nt_time = int.from_bytes(nt_time, byteorder='little')  # Convert byte string to integer
+        unix_time = (nt_time - 116444736000000000) // 10000000  # Convert to Unix time (seconds)
+        return datetime.utcfromtimestamp(unix_time)
 
     def MD5(self, data):
         md5 = hashlib.new('md5')
@@ -1423,13 +1505,89 @@ class SAMHashes(OfflineRegistry):
         except:
             pass
 
+        F = self.getValue(ntpath.join(r'SAM\Domains\Account','F'))[1]
+        domainData = DOMAIN_ACCOUNT_F(F)
+        LockoutThreshold = domainData['LockoutThreshold']
+        LockoutDuration = domainData['LockoutDuration']
+        LockoutDurationMinutes = timedelta(microseconds=abs(LockoutDuration) // 10).total_seconds() / 60
+
+        V = self.getValue(ntpath.join(r'SAM\Domains\Account','V'))[1]
+        domainDataV = DOMAIN_ACCOUNT_V(V)
+        system_sid = self.binary_to_sid(domainDataV['SystemSid'], without_prefix=True)
+
+        groups_root = r'SAM\Domains\Builtin\Aliases'
+        groups = OrderedDict()
+
+        for entry in self.enumKey(groups_root):
+            if not entry.startswith("00000"):
+                continue
+
+            data = self.getValue(ntpath.join(groups_root, entry, 'C'))[1]
+            group_data = BUILTIN_GROUP_C(data)
+
+            name_offset = group_data['NameOffset']
+            name_length = group_data['NameLength']
+            groupname = group_data['Data'][name_offset:name_offset + name_length].decode('utf-16')
+            user_count = group_data['UserCount']
+
+            groups[groupname] = {
+                'Group Name': groupname,
+                'User Count': user_count,
+                'Members': []
+            }
+
+            try:
+                new_offset = 0
+                for _ in range(500):  # Check a maximum of 500 members
+                    offset = group_data['UsersOffset'] + 52 + new_offset
+                    entry_type = unpack("<L", data[offset:offset + 4])[0]
+
+                    if entry_type in (257, 1281):
+                        sid_length = 12 if entry_type == 257 else 28
+                        sid = self.binary_to_sid(data[offset:offset + sid_length])
+                        groups[groupname]['Members'].append(sid)
+                        new_offset += sid_length
+
+            except Exception:
+                if not groups[groupname]['Members']:
+                    groups[groupname]['Members'] = ['No users in this group']
+
+        local_admins = [
+            member.strip()
+            for group in groups.values()
+            if group['Group Name'] == 'Administrators'
+            for member in group['Members']
+            if member.strip()
+        ]
+
         for rid in rids:
-            userAccount = USER_ACCOUNT_V(self.getValue(ntpath.join(usersKey,rid,'V'))[1])
-            rid = int(rid,16)
+            disabled = locked_out = auto_locked = is_admin = False
+
+            userAccountF = USER_ACCOUNT_F(self.getValue(ntpath.join(usersKey, rid, 'F'))[1])
+            InvalidPWDCount = userAccountF['InvalidPWDCount']
+            LastIncorrectPasswordTimestamp = userAccountF['LastIncorrectPasswordTimestamp']
+            LastIncorrectPasswordTimestamp_datetime = self.nt_time_to_datetime(LastIncorrectPasswordTimestamp)
+            UserNumber = userAccountF['UserNumber']
+            user_sid = f"{system_sid}-{UserNumber}"
+
+            is_admin = user_sid in local_admins
+            locked = InvalidPWDCount >= LockoutThreshold
+
+            if locked:  # Let's check if the LockoutDuration has passed.
+                lockout_expiry_time = LastIncorrectPasswordTimestamp_datetime + timedelta(minutes=LockoutDurationMinutes)
+                now = datetime.utcnow()
+                locked = now < lockout_expiry_time  # Compare current time with lockout expiry
+
+            grouped_data = userAccountF['GroupedData']
+            disabled = bool(grouped_data & 0x0001)
+            auto_locked = bool(grouped_data & 0x0400)
+            locked_out = locked
+
+            userAccount = USER_ACCOUNT_V(self.getValue(ntpath.join(usersKey, rid, 'V'))[1])
+            rid = int(rid, 16)
 
             V = userAccount['Data']
-
-            userName = V[userAccount['NameOffset']:userAccount['NameOffset']+userAccount['NameLength']].decode('utf-16le')
+            userName = V[userAccount['NameOffset']:userAccount['NameOffset'] + userAccount['NameLength']].decode('utf-16le')
 
             if userAccount['NTHashLength'] == 0:
                 logging.debug('The account %s doesn\'t have hash information.' % userName)
@@ -1467,6 +1625,10 @@ class SAMHashes(OfflineRegistry):
                 ntHash = ntlm.NTOWFv1('','')
 
             answer =  "%s:%d:%s:%s:::" % (userName, rid, hexlify(lmHash).decode('utf-8'), hexlify(ntHash).decode('utf-8'))
+
+            if self.__printUserStatus is True:
+                answer = f"{answer} (Enabled={'False' if disabled else 'True'}) (Locked={'True' if locked_out or auto_locked else 'False'}) (Admin={'True' if is_admin else 'False'})"
+
             self.__itemsFound[rid] = answer
             self.__perSecretCallback(answer)
 
@@ -1963,6 +2125,10 @@ class NTDSHashes:
         'pekList':b'ATTk590689',
         'supplementalCredentials':b'ATTk589949',
         'pwdLastSet':b'ATTq589920',
+        'trustAuthIncoming':b'ATTk589953',
+        'trustAuthOutgoing':b'ATTk589959',
+        'trustPartner':b'ATTm589957',
+        'instanceType':b'ATTj131073'
     }
 
     NAME_TO_ATTRTYP = {
@@ -1997,6 +2163,9 @@ class NTDSHashes:
         18:'aes256-cts-hmac-sha1-96',
         0xffffff74:'rc4_hmac',
     }
+
+    ROOTPEKLISTPERMUTATION = [2,4,25,9,7,27,5,11]
+    SCHEMAPEKLISTPERMUTATION = [37,2,17,36,20,11,22,7]
 
     INTERNAL_TO_NAME = dict((v,k) for k,v in NAME_TO_INTERNAL.items())
 
@@ -2059,7 +2228,7 @@ class NTDSHashes:
                  useVSSMethod=False, justNTLM=False, pwdLastSet=False, resumeSession=None, outputFileName=None,
                  justUser=None, skipUser=None,ldapFilter=None, printUserStatus=False,
                  perSecretCallback = lambda secretType, secret : _print_helper(secret),
-                 resumeSessionMgr=ResumeSessionMgrInFile):
+                 resumeSessionMgr=ResumeSessionMgrInFile, dumpTdo=False, isADAMLDS=False):
         self.__bootKey = bootKey
         self.__NTDS = ntdsFile
         self.__history = history
@@ -2075,6 +2244,7 @@ class NTDSHashes:
         self.__PEK = list()
         self.__cryptoCommon = CryptoCommon()
         self.__kerberosKeys = OrderedDict()
+        self.__tdoSecrets = OrderedDict()
         self.__clearTextPwds = OrderedDict()
         self.__justNTLM = justNTLM
         self.__resumeSession = resumeSessionMgr(resumeSession)
@@ -2083,10 +2253,13 @@ class NTDSHashes:
         self.__ldapFilter = ldapFilter
         self.__skipUser = skipUser
         self.__perSecretCallback = perSecretCallback
+        self.__isADAMLDS = isADAMLDS
+        self.__dumpTdo = dumpTdo
 
 		# these are all the columns that we need to get the secrets.
 		# If in the future someone finds other columns containing interesting things please extend ths table.
         self.__filter_tables_usersecret = {
+            self.NAME_TO_INTERNAL['objectGUID'] : 1,
             self.NAME_TO_INTERNAL['objectSid'] : 1,
             self.NAME_TO_INTERNAL['dBCSPwd'] : 1,
             self.NAME_TO_INTERNAL['name'] : 1,
@@ -2100,7 +2273,11 @@ class NTDSHashes:
             self.NAME_TO_INTERNAL['userAccountControl'] : 1,
             self.NAME_TO_INTERNAL['supplementalCredentials'] : 1,
             self.NAME_TO_INTERNAL['pekList'] : 1,
+            self.NAME_TO_INTERNAL['instanceType'] : 1,
 
+            self.NAME_TO_INTERNAL['trustAuthIncoming'] : 1,
+            self.NAME_TO_INTERNAL['trustAuthOutgoing'] : 1,
+            self.NAME_TO_INTERNAL['trustPartner'] : 1,
         }
 
     def getResumeSessionFile(self):
@@ -2109,6 +2286,9 @@ class NTDSHashes:
     def __getPek(self):
         LOG.info('Searching for pekList, be patient')
         peklist = None
+        AdamSchemaPekList = None
+        AdamRootPekList = None
+
         while True:
             try:
                 record = self.__ESEDB.getNextRow(self.__cursor, filter_tables=self.__filter_tables_usersecret)
@@ -2118,13 +2298,50 @@ class NTDSHashes:
 
             if record is None:
                 break
-            elif record[self.NAME_TO_INTERNAL['pekList']] is not None:
-                peklist =  unhexlify(record[self.NAME_TO_INTERNAL['pekList']])
-                break
-            elif record[self.NAME_TO_INTERNAL['sAMAccountType']] in self.ACCOUNT_TYPES:
+
+            elif record.get(self.NAME_TO_INTERNAL['pekList']) is not None:
+                # If we detect a Schema object with a PEKlist, it's a psuedo-PEKlist which must be mixed with
+                # the pseudo-PEKlist found in the Root object.
+                if self.__isADAMLDS and record.get(b'ATTm3') == 'Schema':
+                    LOG.debug("Possible ADAM LDS detected based on PEKList attribute in Schma object")
+                    AdamSchemaPekList = unhexlify(record[self.NAME_TO_INTERNAL['pekList']])
+                    continue
+
+                # If we have a blank ATTm3 (name) record, it's the Root record's psuedo-PEKlist object to be mixed
+                # with the schema to form the bootkey for ADAMLDS
+                elif self.__isADAMLDS and record.get(b'ATTm3') == None:
+                    AdamRootPekList = unhexlify(record[self.NAME_TO_INTERNAL['pekList']])
+                    continue
+
+                # if the PEKlist obeys the standard PEK header format, then it's a real PEKlist, which we will
+                # later decode with the bootkey to get the decrypted PEKlist.
+                if record.get(self.NAME_TO_INTERNAL['pekList']).startswith(b"03000000") or record.get(self.NAME_TO_INTERNAL['pekList']).startswith(b"02000000"):
+                    peklist = unhexlify(record[self.NAME_TO_INTERNAL['pekList']])
+
+            # ADAMLDS accounts do not have sAMAccountType values, and their username values are stored in a very
+            # generic element "name" (ATTm3), so we must assume that anything with a unicodePwd is an account in this situation
+            elif (record.get(self.NAME_TO_INTERNAL['sAMAccountType']) is not None and record.get(self.NAME_TO_INTERNAL['sAMAccountType']) in self.ACCOUNT_TYPES and record.get(self.NAME_TO_INTERNAL['instanceType']) & 4) or (self.__isADAMLDS and record.get(self.NAME_TO_INTERNAL['unicodePwd']) is not None):
                 # Okey.. we found some users, but we're not yet ready to process them.
                 # Let's just store them in a temp list
                 self.__tmpUsers.append(record)
+
+        # Here we calculate the permutations of root and schema pseudo-peklist to generate the ADAMLDS bootkey value
+        if self.__isADAMLDS and AdamSchemaPekList is not None and AdamRootPekList is not None:
+            LOG.debug("The DITfile being processed is an ADAM LDS DITfile.")
+            bootkey = []
+            for i in self.ROOTPEKLISTPERMUTATION:
+                bootkey.append(AdamRootPekList[i])
+
+            for i in self.SCHEMAPEKLISTPERMUTATION:
+                bootkey.append(AdamSchemaPekList[i])
+
+            # override the bootkey value.
+            self.__bootKey = bytearray(bootkey)
+            LOG.debug("Calculated ADAMLDS bootkey: %s" % hexlify(self.__bootKey))
+
+        elif self.__isADAMLDS and self.__bootKey == b'':
+            LOG.critical("ADAMLDS ditfile detected, but could not calculate bootkey!")
+            raise Exception("ADAMLDS ditfile detected, but could not calculate bootkey!")
 
         if peklist is not None:
             encryptedPekList = self.PEKLIST_ENC(peklist)
@@ -2202,18 +2419,89 @@ class NTDSHashes:
             dt = datetime.fromtimestamp(t)
             return dt.strftime("%Y-%m-%d %H:%M")
 
+    def __decryptTDOSecret(self, record, way, outputfile=None):
+
+        LOG.debug('Entering NTDSHashes.__decryptTDOSecret')
+        trustAuthTypeList = ["NONE", "NT4OWF","CLEAR","VERSION"]
+        if way == "In":
+            val = record[self.NAME_TO_INTERNAL['trustAuthIncoming']]
+        else:
+            val = record[self.NAME_TO_INTERNAL['trustAuthOutgoing']]
+        cipherText = self.CRYPTED_BLOB(unhexlify(val))
+        plaintext = None
+        if cipherText['Header'][:4] == b'\x13\x00\x00\x00':
+            # Win2016 TP4 decryption is different
+            pekIndex = hexlify(cipherText['Header'])
+            plainText = self.__cryptoCommon.decryptAES(self.__PEK[int(pekIndex[8:10])],
+                                                        cipherText['EncryptedHash'][4:],
+                                                        cipherText['KeyMaterial'])
+            haveInfo = True
+        else:
+            plainText = self.__removeRC4Layer(cipherText)
+            haveInfo = True
+        tdoInfo = plainText.hex()
+        authInfoOffset = unpack('<L', unhexlify(tdoInfo[8:16]))[0]
+        authInfo = tdoInfo[authInfoOffset*2:]
+
+        if(len(authInfo[16:16+8]) != 8):
+            LOG.debug("Cannot process the TDO... Decryption failed")
+            LOG.debug('Leaving NTDSHashes.__decryptTDOSecret')
+            return
+        trustAuthType = trustAuthTypeList[unpack('<L', unhexlify(authInfo[16:16+8]))[0]]
+        trustPasswordNT = "Can only process CLEAR AUTH trusts"
+        trustPassword = ""
+        if(trustAuthType == "CLEAR"):
+            trustPassword = authInfo[32:88]
+            trustPasswordNT = hashlib.new('md4', unhexlify(trustPassword)).digest().hex()
+            trustPassword = b64encode(unhexlify(trustPassword)).decode()
+
+        trustPartner = record[self.NAME_TO_INTERNAL['trustPartner']]
+        answer = "{} {} {} : NT {} / PLAIN {} ".format(
+            way,
+            trustAuthType,
+            trustPartner,
+            trustPasswordNT,
+            trustPassword
+        )
+
+        # Same thing to retrieve the old password
+        authInfoOffsetOld = unpack('<L', unhexlify(tdoInfo[16:24]))[0]
+        authInfoOld = tdoInfo[authInfoOffsetOld*2:]
+        trustPasswordNTOld = "Can only process CLEAR AUTH trusts"
+        trustPasswordOld = ""
+        if(trustAuthType == "CLEAR"):
+            trustPasswordOld = authInfoOld[32:88]
+            trustPasswordNTOld = hashlib.new('md4', unhexlify(trustPasswordOld)).digest().hex()
+            trustPasswordOld = b64encode(unhexlify(trustPasswordOld)).decode()
+
+        answerOld = "{} {} {} : NT {} / PLAIN {} ".format(
+            way + " - 1",
+            trustAuthType,
+            trustPartner,
+            trustPasswordNTOld,
+            trustPasswordOld
+        )
+
+        self.__tdoSecrets[answer] = None
+        self.__tdoSecrets[answerOld] = None
+        if outputfile != None:
+            self.__writeOutput(outputfile, answer + '\n' + answerOld + '\n')
+        LOG.debug('Leaving NTDSHashes.__decryptTDOSecret')
+
+
+
     def __decryptSupplementalInfo(self, record, prefixTable=None, keysFile=None, clearTextFile=None):
         # This is based on [MS-SAMR] 2.2.10 Supplemental Credentials Structures
         haveInfo = False
         LOG.debug('Entering NTDSHashes.__decryptSupplementalInfo')
         if self.__useVSSMethod is True:
-            if record[self.NAME_TO_INTERNAL['supplementalCredentials']] is not None:
+            if record.get(self.NAME_TO_INTERNAL['supplementalCredentials']) is not None:
                 if len(unhexlify(record[self.NAME_TO_INTERNAL['supplementalCredentials']])) > 24:
                     if record[self.NAME_TO_INTERNAL['userPrincipalName']] is not None:
                         domain = record[self.NAME_TO_INTERNAL['userPrincipalName']].split('@')[-1]
-                        userName = '%s\\%s' % (domain, record[self.NAME_TO_INTERNAL['sAMAccountName']])
+                        userName = '%s\\%s' % (domain, record.get(self.NAME_TO_INTERNAL['sAMAccountName']))
                     else:
-                        userName = '%s' % record[self.NAME_TO_INTERNAL['sAMAccountName']]
+                        userName = '%s' % record.get(self.NAME_TO_INTERNAL['sAMAccountName'])
                     cipherText = self.CRYPTED_BLOB(unhexlify(record[self.NAME_TO_INTERNAL['supplementalCredentials']]))
 
                     if cipherText['Header'][:4] == b'\x13\x00\x00\x00':
@@ -2222,6 +2510,8 @@ class NTDSHashes:
                         plainText = self.__cryptoCommon.decryptAES(self.__PEK[int(pekIndex[8:10])],
                                                                    cipherText['EncryptedHash'][4:],
                                                                    cipherText['KeyMaterial'])
+                        if self.__isADAMLDS:
+                            LOG.debug(plainText)
                         haveInfo = True
                     else:
                         plainText = self.__removeRC4Layer(cipherText)
@@ -2328,7 +2618,7 @@ class NTDSHashes:
             sid = SAMR_RPC_SID(unhexlify(record[self.NAME_TO_INTERNAL['objectSid']]))
             rid = sid.formatCanonical().split('-')[-1]
 
-            if record[self.NAME_TO_INTERNAL['dBCSPwd']] is not None:
+            if record.get(self.NAME_TO_INTERNAL['dBCSPwd']) is not None:
                 encryptedLMHash = self.CRYPTED_HASH(unhexlify(record[self.NAME_TO_INTERNAL['dBCSPwd']]))
                 if encryptedLMHash['Header'][:4] == b'\x13\x00\x00\x00':
                     # Win2016 TP4 decryption is different
@@ -2343,7 +2633,7 @@ class NTDSHashes:
             else:
                 LMHash = ntlm.LMOWFv1('', '')
 
-            if record[self.NAME_TO_INTERNAL['unicodePwd']] is not None:
+            if record.get(self.NAME_TO_INTERNAL['unicodePwd']) is not None:
                 encryptedNTHash = self.CRYPTED_HASH(unhexlify(record[self.NAME_TO_INTERNAL['unicodePwd']]))
                 if encryptedNTHash['Header'][:4] == b'\x13\x00\x00\x00':
                     # Win2016 TP4 decryption is different
@@ -2354,19 +2644,40 @@ class NTDSHashes:
                                                                encryptedNTHash['KeyMaterial'])
                 else:
                     tmpNTHash = self.__removeRC4Layer(encryptedNTHash)
-                NTHash = self.__removeDESLayer(tmpNTHash, rid)
+
+                # ADAMLDS hashes do not have 3DES layers, skip them if this is ADAMLDS ditfile.
+                if self.__isADAMLDS:
+                    NTHash = tmpNTHash
+                else:
+                    NTHash = self.__removeDESLayer(tmpNTHash, rid)
             else:
                 NTHash = ntlm.NTOWFv1('', '')
 
-            if record[self.NAME_TO_INTERNAL['userPrincipalName']] is not None:
+            userName = None
+            # not all .ditfiles will have userPrincipalName present for user records.
+            if record.get(self.NAME_TO_INTERNAL['userPrincipalName']) is not None:
                 domain = record[self.NAME_TO_INTERNAL['userPrincipalName']].split('@')[-1]
                 userName = '%s\\%s' % (domain, record[self.NAME_TO_INTERNAL['sAMAccountName']])
-            else:
-                userName = '%s' % record[self.NAME_TO_INTERNAL['sAMAccountName']]
+
+            # Email attribute field (standard)?
+            elif self.__isADAMLDS and record.get(b"ATTm-2025721505") is not None:
+                userName = record[b"ATTm-2025721505"]
+
+            # OMF uses a non-standard email attribute field
+            elif self.__isADAMLDS and record.get(b"ATTm-2038391160") is not None:
+                userName = record[b"ATTm-2038391160"]
+
+            # this helps us when the type is ADAMLDS and we may not have the other username fields present.
+            elif self.__isADAMLDS and record.get(self.NAME_TO_INTERNAL['name']) is not None:
+                userName = record[self.NAME_TO_INTERNAL['name']]
+
+            # final fallback for userName attribute
+            elif record.get(self.NAME_TO_INTERNAL['sAMAccountName']) is not None:
+                userName = '%s' % record.get(self.NAME_TO_INTERNAL['sAMAccountName'])
 
             if self.__printUserStatus is True:
                 # Enabled / disabled users
-                if record[self.NAME_TO_INTERNAL['userAccountControl']] is not None:
+                if record.get(self.NAME_TO_INTERNAL['userAccountControl']) is not None:
                     if '{0:08b}'.format(record[self.NAME_TO_INTERNAL['userAccountControl']])[-2:-1] == '1':
                         userAccountStatus = 'Disabled'
                     elif '{0:08b}'.format(record[self.NAME_TO_INTERNAL['userAccountControl']])[-2:-1] == '0':
@@ -2374,7 +2685,7 @@ class NTDSHashes:
                 else:
                     userAccountStatus = 'N/A'
 
-            if record[self.NAME_TO_INTERNAL['pwdLastSet']] is not None:
+            if record.get(self.NAME_TO_INTERNAL['pwdLastSet']) is not None:
                 pwdLastSet = self.__fileTimeToDateTime(record[self.NAME_TO_INTERNAL['pwdLastSet']])
             else:
                 pwdLastSet = 'N/A'
@@ -2393,14 +2704,14 @@ class NTDSHashes:
             if self.__history:
                 LMHistory = []
                 NTHistory = []
-                if record[self.NAME_TO_INTERNAL['lmPwdHistory']] is not None:
+                if record.get(self.NAME_TO_INTERNAL['lmPwdHistory']) is not None:
                     encryptedLMHistory = self.CRYPTED_HISTORY(unhexlify(record[self.NAME_TO_INTERNAL['lmPwdHistory']]))
                     tmpLMHistory = self.__removeRC4Layer(encryptedLMHistory)
                     for i in range(0, len(tmpLMHistory) // 16):
                         LMHash = self.__removeDESLayer(tmpLMHistory[i * 16:(i + 1) * 16], rid)
                         LMHistory.append(LMHash)
 
-                if record[self.NAME_TO_INTERNAL['ntPwdHistory']] is not None:
+                if record.get(self.NAME_TO_INTERNAL['ntPwdHistory']) is not None:
                     encryptedNTHistory = self.CRYPTED_HISTORY(unhexlify(record[self.NAME_TO_INTERNAL['ntPwdHistory']]))
 
                     if encryptedNTHistory['Header'][:4] == b'\x13\x00\x00\x00':
@@ -2561,6 +2872,7 @@ class NTDSHashes:
         hashesOutputFile = None
         keysOutputFile = None
         clearTextOutputFile = None
+        tdoOutputFile = None
         skipUsers = []
 
         if self.__skipUser:
@@ -2570,7 +2882,7 @@ class NTDSHashes:
                 f.close()
             else:
                 skipUsers = self.__skipUser.split(',')
-        
+
         if self.__useVSSMethod is True:
             if self.__NTDS is None:
                 # No NTDS.dit file provided and were asked to use VSS
@@ -2610,6 +2922,9 @@ class NTDSHashes:
                 if self.__justNTLM is False:
                     keysOutputFile = openFile(self.__outputFileName+'.ntds.kerberos',mode)
                     clearTextOutputFile = openFile(self.__outputFileName+'.ntds.cleartext',mode)
+                if self.__dumpTdo is True:
+                    tdoOutputFile = openFile(self.__outputFileName+'.ntds.tdo', mode)
+
 
             LOG.info('Dumping Domain Credentials (domain\\uid:rid:lmhash:nthash)')
             if self.__useVSSMethod:
@@ -2624,7 +2939,11 @@ class NTDSHashes:
                         try:
                             self.__decryptHash(record, outputFile=hashesOutputFile)
                             if self.__justNTLM is False:
-                                self.__decryptSupplementalInfo(record, None, keysOutputFile, clearTextOutputFile)
+                                # The struct for supplemental creds on ADAM LDS is very different than other versions and is not reversed yet.
+                                if self.__isADAMLDS:
+                                    LOG.debug("Supplemental Credentials info found and decrypted, but is not currently supported.")
+                                    #LOG.debug(self.__decryptSupplementalInfo(record, None, keysOutputFile, clearTextOutputFile))
+                                #self.__decryptSupplementalInfo(record, None, keysOutputFile, clearTextOutputFile)
                         except Exception as e:
                             LOG.debug('Exception', exc_info=True)
                             try:
@@ -2648,10 +2967,16 @@ class NTDSHashes:
                         if record is None:
                             break
                         try:
-                            if record[self.NAME_TO_INTERNAL['sAMAccountType']] in self.ACCOUNT_TYPES:
+                            if record.get(self.NAME_TO_INTERNAL['sAMAccountType']) in self.ACCOUNT_TYPES and record.get(self.NAME_TO_INTERNAL['instanceType']) & 4:    # "The object is writable on this directory"
                                 self.__decryptHash(record, outputFile=hashesOutputFile)
                                 if self.__justNTLM is False:
                                     self.__decryptSupplementalInfo(record, None, keysOutputFile, clearTextOutputFile)
+
+                            if record[self.NAME_TO_INTERNAL['trustAuthIncoming']] is not None and self.__NTDS is not None and self.__dumpTdo is True:
+                                self.__decryptTDOSecret(record, "In", outputfile=tdoOutputFile)
+                            if record[self.NAME_TO_INTERNAL['trustAuthOutgoing']] is not None and self.__NTDS is not None and self.__dumpTdo is True:
+                                self.__decryptTDOSecret(record, "Out", outputfile=tdoOutputFile)
+
                         except Exception as e:
                             LOG.debug('Exception', exc_info=True)
                             try:
@@ -2861,6 +3186,17 @@ class NTDSHashes:
 
                 for itemKey in list(self.__clearTextPwds.keys()):
                     self.__perSecretCallback(NTDSHashes.SECRET_TYPE.NTDS_CLEARTEXT, itemKey)
+
+            # Display TDO secret extracted
+            if len(self.__tdoSecrets) > 0:
+                if self.__useVSSMethod is True:
+                    LOG.info('TDO secrets from %s ' % self.__NTDS)
+                else:
+                    LOG.info('TDO extraction only available with NTDS local dumpfile')
+
+                for itemKey in list(self.__tdoSecrets.keys()):
+                    self.__perSecretCallback(NTDSHashes.SECRET_TYPE.NTDS, itemKey)
+
         finally:
             # Resources cleanup
             if hashesOutputFile is not None:
@@ -2871,6 +3207,9 @@ class NTDSHashes:
 
             if clearTextOutputFile is not None:
                 clearTextOutputFile.close()
+
+            if tdoOutputFile is not None:
+                tdoOutputFile.close()
 
             self.__resumeSession.endTransaction()
 
