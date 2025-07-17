@@ -1,7 +1,9 @@
 #!/usr/bin/env python
 # Impacket - Collection of Python classes for working with network protocols.
 #
-# Copyright (C) 2022 Fortra. All rights reserved.
+# Copyright Fortra, LLC and its affiliated companies 
+#
+# All rights reserved.
 #
 # This software is provided under a slightly modified version
 # of the Apache Software License. See the accompanying LICENSE file
@@ -19,16 +21,35 @@
 
 import os
 import cmd
+import sys
 
+# for "do_upload"
+import hashlib
+import base64
+import shlex
 
 class SQLSHELL(cmd.Cmd):
-    def __init__(self, SQL, show_queries=False):
-        cmd.Cmd.__init__(self)
+    def __init__(self, SQL, show_queries=False, tcpShell=None):
+        if tcpShell is not None:
+            cmd.Cmd.__init__(self, stdin=tcpShell.stdin, stdout=tcpShell.stdout)
+            sys.stdout = tcpShell.stdout
+            sys.stdin = tcpShell.stdin
+            sys.stderr = tcpShell.stdout
+            self.use_rawinput = False
+            self.shell = tcpShell
+        else:
+            cmd.Cmd.__init__(self)
+            self.shell = None
+
         self.sql = SQL
         self.show_queries = show_queries
         self.at = []
         self.set_prompt()
         self.intro = '[!] Press help for extra shell commands'
+
+    def print_replies(self):
+        # to condense all calls to sql.printReplies with right logger in this context
+        self.sql.printReplies(error_logger=print, info_logger=print)
 
     def do_help(self, line):
         print("""
@@ -38,7 +59,7 @@ class SQLSHELL(cmd.Cmd):
     disable_xp_cmdshell        - you know what it means
     enum_db                    - enum databases
     enum_links                 - enum linked servers
-    enum_impersonate           - check logins that can be impersonate
+    enum_impersonate           - check logins that can be impersonated
     enum_logins                - enum login users
     enum_users                 - enum current db users
     enum_owner                 - enum db owner
@@ -49,6 +70,8 @@ class SQLSHELL(cmd.Cmd):
     sp_start_job {cmd}         - executes cmd using the sql server agent (blind)
     use_link {link}            - linked server to use (set use_link localhost to go back to local or use_link .. to get back one step)
     ! {cmd}                    - executes a local shell cmd
+    upload {from} {to}         - uploads file {from} to the SQLServer host {to}
+    download {from} {to}       - downloads file from the SQLServer host {from} to {to}
     show_query                 - show query
     mask_query                 - mask query
     """)
@@ -84,7 +107,7 @@ class SQLSHELL(cmd.Cmd):
             self.at.append((at, exec_as))
         else:
             self.sql_query(exec_as)
-            self.sql.printReplies()
+            self.print_replies()
 
     def do_exec_as_login(self, s):
         exec_as = "execute as login='%s';" % s
@@ -102,7 +125,7 @@ class SQLSHELL(cmd.Cmd):
         else:
             self.at.append((s, ''))
             row = self.sql_query('select system_user as "username"')
-            self.sql.printReplies()
+            self.print_replies()
             if len(row) < 1:
                 self.at = self.at[:-1]
 
@@ -117,10 +140,96 @@ class SQLSHELL(cmd.Cmd):
     def do_shell(self, s):
         os.system(s)
 
+    def do_download(self, line):
+        try:
+            args = shlex.split(line, posix=False)
+            remote_path = args[0]
+            local_path = args[1]
+
+            # check permission
+            result = self.sql_query("SELECT HAS_PERMS_BY_NAME(NULL, NULL, 'ADMINISTER BULK OPERATIONS') AS HasBulkAdminPermission")
+            if result[0].get('HasBulkAdminPermission') != 1:
+                print("[-] Current user does not have 'ADMINISTER BULK OPERATIONS' permission")
+                return
+
+            # download file
+            result = self.sql_query("SELECT * FROM sys.dm_os_file_exists('" + remote_path + "')")
+            if result[0].get('file_exists') != 1:
+                print("[-] File does not exist")
+                return
+            print("[+] File exists, downloading...")
+            result = self.sql_query("SELECT * FROM OPENROWSET(BULK N'" + remote_path + "', SINGLE_BLOB) AS HexContent")
+            if len(result) == 0:
+                print("[-] Error downloading file. File is either empty or access is denied")
+                return
+
+            # write to disk
+            print("[+] Writing file to disk...")
+            with open(local_path, 'wb') as f:
+                data = bytes.fromhex(result[0].get('BulkColumn').decode())
+                f.write(data)
+            print("[+] Downloaded")
+        except Exception as e:
+            print("[-] Unhandled Exception:", e)
+
+    def do_upload(self, line):
+        BUFFER_SIZE = 5 * 1024
+        try:
+            # validate "xp_cmdshell" is enabled
+            self.sql_query("exec master.dbo.sp_configure 'show advanced options', 1; RECONFIGURE;")
+            result = self.sql_query("exec master.dbo.sp_configure 'xp_cmdshell'")
+            self.sql_query("exec master.dbo.sp_configure 'show advanced options', 0; RECONFIGURE;")
+            if result[0].get('run_value') != 1:
+                print("[-] xp_cmdshell not enabled. Try running 'enable_xp_cmdshell' first")
+                return
+
+            args = shlex.split(line, posix=False)
+            local_path = args[0]
+            remote_path = args[1]
+
+            # upload file
+            with open(local_path, 'rb') as f:
+                data = f.read()
+                md5sum = hashlib.md5(data).hexdigest()
+                b64enc_data = b"".join(base64.b64encode(data).split()).decode()
+            print("[+] Data length (b64-encoded): %.2f KB with MD5: %s" % (len(b64enc_data) / 1024, str(md5sum)))
+            print("[+] Uploading...")
+            for i in range(0, len(b64enc_data), BUFFER_SIZE):
+                cmd = 'echo ' + b64enc_data[i:i+BUFFER_SIZE] + ' >> "' + remote_path + '.b64"'
+                self.sql_query("EXEC xp_cmdshell '" + cmd + "'")
+            result = self.sql_query("EXEC xp_fileexist '" + remote_path + ".b64'")
+            if result[0].get('File Exists') != 1:
+                print("[-] Error uploading file. Check permissions in the configured remote path")
+                return
+            print("[+] Uploaded")
+
+            # decode
+            cmd = 'certutil -decode "' + remote_path + '.b64" "' + remote_path + '"'
+            self.sql_query("EXEC xp_cmdshell '" + cmd + "'")
+            print("[+] " + cmd)
+
+            # remove encoded
+            cmd = 'del "' + remote_path + '.b64"'
+            self.sql_query("EXEC xp_cmdshell '" + cmd + "'")
+            print("[+] " + cmd)
+
+            # validate hash
+            cmd = 'certutil -hashfile "' + remote_path + '" MD5'
+            result = self.sql_query("EXEC xp_cmdshell '" + cmd + "'")
+            print("[+] " + cmd)
+            md5sum_uploaded = result[1].get('output').replace(" ", "")
+            if md5sum == md5sum_uploaded:
+                print("[+] MD5 hashes match")
+            else:
+                print("[-] ERROR! MD5 hashes do NOT match!")
+                print("[+] Uploaded file MD5: %s" % md5sum_uploaded)
+        except Exception as e:
+            print("[-] Unhandled Exception:", e)
+
     def do_xp_dirtree(self, s):
         try:
             self.sql_query("exec master.sys.xp_dirtree '%s',1,1" % s)
-            self.sql.printReplies()
+            self.print_replies()
             self.sql.printRows()
         except:
             pass
@@ -128,7 +237,7 @@ class SQLSHELL(cmd.Cmd):
     def do_xp_cmdshell(self, s):
         try:
             self.sql_query("exec master..xp_cmdshell '%s'" % s)
-            self.sql.printReplies()
+            self.print_replies()
             self.sql.colMeta[0]['TypeData'] = 80*2
             self.sql.printRows()
         except:
@@ -144,7 +253,7 @@ class SQLSHELL(cmd.Cmd):
                                 "@subsystem='CMDEXEC',@command='%s',@on_success_action=1;"
                                 "EXEC msdb..sp_add_jobserver @job_name=@job;"
                                 "EXEC msdb..sp_start_job @job_name=@job;" % s)
-            self.sql.printReplies()
+            self.print_replies()
             self.sql.printRows()
         except:
             pass
@@ -159,7 +268,7 @@ class SQLSHELL(cmd.Cmd):
         try:
             self.sql_query("exec master.dbo.sp_configure 'show advanced options',1;RECONFIGURE;"
                                 "exec master.dbo.sp_configure 'xp_cmdshell', 1;RECONFIGURE;")
-            self.sql.printReplies()
+            self.print_replies()
             self.sql.printRows()
         except:
             pass
@@ -168,28 +277,28 @@ class SQLSHELL(cmd.Cmd):
         try:
             self.sql_query("exec sp_configure 'xp_cmdshell', 0 ;RECONFIGURE;exec sp_configure "
                             "'show advanced options', 0 ;RECONFIGURE;")
-            self.sql.printReplies()
+            self.print_replies()
             self.sql.printRows()
         except:
             pass
 
     def do_enum_links(self, line):
         self.sql_query("EXEC sp_linkedservers")
-        self.sql.printReplies()
+        self.print_replies()
         self.sql.printRows()
         self.sql_query("EXEC sp_helplinkedsrvlogin")
-        self.sql.printReplies()
+        self.print_replies()
         self.sql.printRows()
 
     def do_enum_users(self, line):
         self.sql_query("EXEC sp_helpuser")
-        self.sql.printReplies()
+        self.print_replies()
         self.sql.printRows()
 
     def do_enum_db(self, line):
         try:
             self.sql_query("select name, is_trustworthy_on from sys.databases")
-            self.sql.printReplies()
+            self.print_replies()
             self.sql.printRows()
         except:
             pass
@@ -197,12 +306,13 @@ class SQLSHELL(cmd.Cmd):
     def do_enum_owner(self, line):
         try:
             self.sql_query("SELECT name [Database], suser_sname(owner_sid) [Owner] FROM sys.databases")
-            self.sql.printReplies()
+            self.print_replies()
             self.sql.printRows()
         except:
             pass
 
     def do_enum_impersonate(self, line):
+        old_db = self.sql.currentDB
         try:
             self.sql_query("select name from sys.databases")
             result = []
@@ -227,11 +337,13 @@ class SQLSHELL(cmd.Cmd):
                                             "  ON pe.grantor_principal_id = pr2.principal_Id "
                                             "WHERE pe.type = 'IM'")
             result.extend(result_rows)
-            self.sql.printReplies()
+            self.print_replies()
             self.sql.rows = result
             self.sql.printRows()
         except:
             pass
+        finally:
+            self.sql_query("use " + old_db)
 
     def do_enum_logins(self, line):
         try:
@@ -239,7 +351,7 @@ class SQLSHELL(cmd.Cmd):
                             "sl.serveradmin, sl.setupadmin, sl.processadmin, sl.diskadmin, sl.dbcreator, "
                             "sl.bulkadmin from  master.sys.server_principals r left join master.sys.syslogins sl "
                             "on sl.sid = r.sid where r.type in ('S','E','X','U','G')")
-            self.sql.printReplies()
+            self.print_replies()
             self.sql.printRows()
         except:
             pass
@@ -247,7 +359,7 @@ class SQLSHELL(cmd.Cmd):
     def default(self, line):
         try:
             self.sql_query(line)
-            self.sql.printReplies()
+            self.print_replies()
             self.sql.printRows()
         except:
             pass
@@ -256,4 +368,6 @@ class SQLSHELL(cmd.Cmd):
         pass
 
     def do_exit(self, line):
+        if self.shell is not None:
+            self.shell.close()
         return True

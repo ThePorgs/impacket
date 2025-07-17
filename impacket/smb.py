@@ -1,6 +1,8 @@
 # Impacket - Collection of Python classes for working with network protocols.
 #
-# Copyright (C) 2022 Fortra. All rights reserved.
+# Copyright Fortra, LLC and its affiliated companies 
+#
+# All rights reserved.
 #
 # This software is provided under a slightly modified version
 # of the Apache Software License. See the accompanying LICENSE file
@@ -58,6 +60,7 @@ from impacket import nmb, ntlm, nt_errors, LOG
 from impacket.structure import Structure
 from impacket.spnego import SPNEGO_NegTokenInit, TypesMech, SPNEGO_NegTokenResp, ASN1_OID, asn1encode, ASN1_AID
 from impacket.krb5.gssapi import KRB5_AP_REQ
+import six
 
 # For signing
 import hashlib
@@ -176,6 +179,7 @@ SMB_QUERY_FS_ATTRIBUTE_INFO      = 0x0105
 SMB_QUERY_FILE_BASIC_INFO        = 0x0101
 SMB_QUERY_FILE_STANDARD_INFO     = 0x0102
 SMB_QUERY_FILE_ALL_INFO          = 0x0107
+SMB_QUERY_FILE_STREAM_INFO       = 0x0109
 FILE_FS_FULL_SIZE_INFORMATION    = 0x03EF
 
 # SET_INFORMATION levels
@@ -578,7 +582,13 @@ class SessionError(Exception):
                 error_code_str = '%s(%s)' % error_code
 
         if self.nt_status:
-            return 'SMB SessionError: %s(%s)' % nt_errors.ERROR_MESSAGES[self.error_code]
+            key = self.error_code
+            if key in nt_errors.ERROR_MESSAGES:
+                error_msg_short = nt_errors.ERROR_MESSAGES[key][0] 
+                error_msg_verbose = nt_errors.ERROR_MESSAGES[key][1] 
+                return 'SMB SessionError: code: 0x%x - %s - %s' % (self.error_code, error_msg_short, error_msg_verbose)
+            else:
+                return 'SMB SessionError: unknown error code: 0x%x' % self.error_code
         else:
             # Fall back to the old format
             return 'SMB SessionError: class: %s, code: %s' % (error_class_str, error_code_str)
@@ -611,10 +621,11 @@ class SharedDevice:
 
 # Contains information about the shared file/directory
 class SharedFile:
-    def __init__(self, ctime, atime, mtime, filesize, allocsize, attribs, shortname, longname):
-        self.__ctime = ctime
-        self.__atime = atime
-        self.__mtime = mtime
+    def __init__(self, ctime, atime, wtime, mtime, filesize, allocsize, attribs, shortname, longname):
+        self.__ctime = ctime # CreateTime ([MS-CIFS] 2.2.8.1.4 SMB_FIND_FILE_DIRECTORY_INFO)
+        self.__atime = atime # LastAccessTime ([MS-CIFS] 2.2.8.1.4 SMB_FIND_FILE_DIRECTORY_INFO)
+        self.__wtime = wtime # LastWriteTime ([MS-CIFS] 2.2.8.1.4 SMB_FIND_FILE_DIRECTORY_INFO)
+        self.__mtime = mtime # LastAttrChangeTime ([MS-CIFS] 2.2.8.1.4 SMB_FIND_FILE_DIRECTORY_INFO)
         self.__filesize = filesize
         self.__allocsize = allocsize
         self.__attribs = attribs
@@ -638,6 +649,12 @@ class SharedFile:
 
     def get_ctime_epoch(self):
         return self.__convert_smbtime(self.__ctime)
+
+    def get_wtime(self):
+        return self.__wtime
+
+    def get_wtime_epoch(self):
+        return self.__convert_smbtime(self.__wtime)
 
     def get_mtime(self):
         return self.__mtime
@@ -804,6 +821,8 @@ class SMBCommand(Structure):
 class AsciiOrUnicodeStructure(Structure):
     UnicodeStructure = ()
     AsciiStructure   = ()
+    ENCODING = 'utf-8'
+
     def __init__(self, flags = 0, **kargs):
         if flags & SMB.FLAGS2_UNICODE:
             self.structure = self.UnicodeStructure
@@ -906,7 +925,7 @@ class SMBFindFileBothDirectoryInfo(AsciiOrUnicodeStructure):
         ('ExtFileAttributes','<L=0'),
     )
     AsciiStructure = (
-        ('FileNameLength','<L-FileName','len(FileName)'),
+        ('FileNameLength','<L-FileName'),
         ('EaSize','<L=0'),
         ('ShortNameLength','<B=0'),
         ('Reserved','<B=0'),
@@ -914,7 +933,7 @@ class SMBFindFileBothDirectoryInfo(AsciiOrUnicodeStructure):
         ('FileName',':'),
     )
     UnicodeStructure = (
-        ('FileNameLength','<L-FileName','len(FileName)*2'),
+        ('FileNameLength','<L-FileName'),
         ('EaSize','<L=0'),
         ('ShortNameLength','<B=0'),
         ('Reserved','<B=0'),
@@ -936,14 +955,14 @@ class SMBFindFileIdFullDirectoryInfo(AsciiOrUnicodeStructure):
         ('ExtFileAttributes','<L=0'),
     )
     AsciiStructure = (
-        ('FileNameLength','<L-FileName','len(FileName)'),
+        ('FileNameLength','<L-FileName'),
         ('EaSize','<L=0'),
         ('Reserved', '<L=0'),
         ('FileID','<q=0'),
         ('FileName','z'),
     )
     UnicodeStructure = (
-        ('FileNameLength','<L-FileName','len(FileName)*2'),
+        ('FileNameLength','<L-FileName'),
         ('EaSize','<L=0'),
         ('Reserved','<L=0'),
         ('FileID','<q=0'),
@@ -964,7 +983,7 @@ class SMBFindFileIdBothDirectoryInfo(AsciiOrUnicodeStructure):
         ('ExtFileAttributes','<L=0'),
     )
     AsciiStructure = (
-        ('FileNameLength','<L-FileName','len(FileName)'),
+        ('FileNameLength','<L-FileName'),
         ('EaSize','<L=0'),
         ('ShortNameLength','<B=0'),
         ('Reserved','<B=0'),
@@ -974,7 +993,7 @@ class SMBFindFileIdBothDirectoryInfo(AsciiOrUnicodeStructure):
         ('FileName','z'),
     )
     UnicodeStructure = (
-        ('FileNameLength','<L-FileName','len(FileName)*2'),
+        ('FileNameLength','<L-FileName'),
         ('EaSize','<L=0'),
         ('ShortNameLength','<B=0'),
         ('Reserved','<B=0'),
@@ -998,11 +1017,11 @@ class SMBFindFileDirectoryInfo(AsciiOrUnicodeStructure):
         ('ExtFileAttributes','<L=0'),
     )
     AsciiStructure = (
-        ('FileNameLength','<L-FileName','len(FileName)'),
+        ('FileNameLength','<L-FileName'),
         ('FileName','z'),
     )
     UnicodeStructure = (
-        ('FileNameLength','<L-FileName','len(FileName)*2'),
+        ('FileNameLength','<L-FileName'),
         ('FileName',':'),
     )
 
@@ -1013,11 +1032,11 @@ class SMBFindFileNamesInfo(AsciiOrUnicodeStructure):
         ('FileIndex','<L=0'),
     )
     AsciiStructure = (
-        ('FileNameLength','<L-FileName','len(FileName)'),
+        ('FileNameLength','<L-FileName'),
         ('FileName','z'),
     )
     UnicodeStructure = (
-        ('FileNameLength','<L-FileName','len(FileName)*2'),
+        ('FileNameLength','<L-FileName'),
         ('FileName',':'),
     )
 
@@ -1035,12 +1054,12 @@ class SMBFindFileFullDirectoryInfo(AsciiOrUnicodeStructure):
         ('ExtFileAttributes','<L=0'),
     )
     AsciiStructure = (
-        ('FileNameLength','<L-FileName','len(FileName)'),
+        ('FileNameLength','<L-FileName'),
         ('EaSize','<L'),
         ('FileName','z'),
     )
     UnicodeStructure = (
-        ('FileNameLength','<L-FileName','len(FileName)*2'),
+        ('FileNameLength','<L-FileName'),
         ('EaSize','<L'),
         ('FileName',':'),
     )
@@ -1060,11 +1079,11 @@ class SMBFindInfoStandard(AsciiOrUnicodeStructure):
         ('ExtFileAttributes','<H=0'),
     )
     AsciiStructure = (
-        ('FileNameLength','<B-FileName','len(FileName)'),
+        ('FileNameLength','<B-FileName'),
         ('FileName','z'),
     )
     UnicodeStructure = (
-        ('FileNameLength','<B-FileName','len(FileName)*2'),
+        ('FileNameLength','<B-FileName'),
         ('FileName',':'),
     )
 
@@ -1082,7 +1101,7 @@ class SMBSetFileBasicInfo(Structure):
         ('LastAccessTime','<q'),
         ('LastWriteTime','<q'),
         ('ChangeTime','<q'),
-        ('ExtFileAttributes','<H'),
+        ('ExtFileAttributes','<L'),
         ('Reserved','<L'),
     )
 
@@ -1292,7 +1311,7 @@ class SMBQueryFileAllInfo(Structure):
         ('Directory','<B'),
         ('Reserved','<H=0'),
         ('EaSize','<L=0'),
-        ('FileNameLength','<L-FileName','len(FileName)'),
+        ('FileNameLength','<L-FileName'),
         ('FileName',':'),
     )
 
@@ -1493,7 +1512,7 @@ class SMBSessionSetupAndX_Extended_Response_Data(AsciiOrUnicodeStructure):
     )
     def getData(self):
         if self.structure == self.UnicodeStructure:
-            if len(str(self['SecurityBlob'])) % 2 == 0:
+            if len(self['SecurityBlob']) % 2 == 0:
                 self['Pad'] = '\x00'
         return AsciiOrUnicodeStructure.getData(self)
 
@@ -2873,7 +2892,7 @@ class SMB(object):
         timestamp |= self._dialects_parameters['LowDateTime']
         timestamp -= 116444736000000000
         timestamp //= 10000000
-        d = datetime.datetime.utcfromtimestamp(timestamp)
+        d = datetime.datetime.fromtimestamp(timestamp, tz=datetime.timezone.utc)
         return d.strftime("%a, %d %b %Y %H:%M:%S GMT")
 
     def disconnect_tree(self, tid):
@@ -3241,7 +3260,7 @@ class SMB(object):
         authenticator['authenticator-vno'] = 5
         authenticator['crealm'] = domain
         seq_set(authenticator, 'cname', userName.components_to_asn1)
-        now = datetime.datetime.utcnow()
+        now = datetime.datetime.now(datetime.timezone.utc)
 
         authenticator['cusec'] = now.microsecond
         authenticator['ctime'] = KerberosTime.to_asn1(now)
@@ -3494,7 +3513,8 @@ class SMB(object):
                 self.login_extended(user, password, domain, lmhash, nthash, use_ntlmv2 = True)
             except:
                 # If the target OS is Windows 5.0 or Samba, let's try using NTLMv1
-                if ntlm_fallback and ((self.get_server_lanman().find('Windows 2000') != -1) or (self.get_server_lanman().find('Samba') != -1)):
+                if ntlm_fallback and ((six.ensure_binary(self.get_server_lanman()).find(b'Windows 2000') != -1) or
+                                      (six.ensure_binary(self.get_server_lanman()).find(b'Samba') != -1)):
                     self.login_extended(user, password, domain, lmhash, nthash, use_ntlmv2 = False)
                     self.__isNTLMv2 = False
                 else:
@@ -3959,7 +3979,7 @@ class SMB(object):
                 filename = record['FileName'].decode('utf-16le') if self.__flags2 & SMB.FLAGS2_UNICODE else \
                                                                         record['FileName'].decode('cp437')
 
-                fileRecord = SharedFile(record['CreationTime'], record['LastAccessTime'], record['LastChangeTime'],
+                fileRecord = SharedFile(record['CreationTime'], record['LastAccessTime'], record['LastWriteTime'], record['LastChangeTime'],
                                   record['EndOfFile'], record['AllocationSize'], record['ExtFileAttributes'],
                                   shortname, filename)
                 files.append(fileRecord)
@@ -3973,7 +3993,7 @@ class SMB(object):
                         findNextParameter['SID'] = sid
                         findNextParameter['SearchCount'] = 1024
                         findNextParameter['InformationLevel'] = SMB_FIND_FILE_BOTH_DIRECTORY_INFO
-                        findNextParameter['ResumeKey'] = 0
+                        findNextParameter['ResumeKey'] = record["FileIndex"]
                         findNextParameter['Flags'] = SMB_FIND_RETURN_RESUME_KEYS | SMB_FIND_CLOSE_AT_EOS
                         if self.__flags2 & SMB.FLAGS2_UNICODE:
                             findNextParameter['FileName'] = resume_filename + b'\x00\x00'

