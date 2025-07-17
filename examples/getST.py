@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 # Impacket - Collection of Python classes for working with network protocols.
 #
-# SECUREAUTH LABS. Copyright (C) 2022 SecureAuth Corporation. All rights reserved.
+# Copyright Fortra, LLC and its affiliated companies 
+#
+# All rights reserved.
 #
 # This software is provided under a slightly modified version
 # of the Apache Software License. See the accompanying LICENSE file
@@ -51,14 +53,14 @@ import random
 import struct
 import sys
 from binascii import hexlify, unhexlify
-from six import b
+from six import ensure_binary
 
 from pyasn1.codec.der import decoder, encoder
 from pyasn1.type.univ import noValue
 
 from impacket import version
 from impacket.examples import logger
-from impacket.examples.utils import parse_credentials
+from impacket.examples.utils import parse_identity
 from impacket.krb5 import constants, types, crypto, ccache
 from impacket.krb5.asn1 import AP_REQ, AS_REP, TGS_REQ, Authenticator, TGS_REP, seq_set, seq_set_iter, PA_FOR_USER_ENC, \
     Ticket as TicketAsn1, EncTGSRepPart, PA_PAC_OPTIONS, EncTicketPart
@@ -282,7 +284,7 @@ class GETST:
 
             seq_set(authenticator, 'cname', clientName.components_to_asn1)
 
-            now = datetime.datetime.utcnow()
+            now = datetime.datetime.now(datetime.timezone.utc)
             authenticator['cusec'] = now.microsecond
             authenticator['ctime'] = KerberosTime.to_asn1(now)
 
@@ -334,7 +336,7 @@ class GETST:
             myTicket = ticket.to_asn1(TicketAsn1())
             seq_set_iter(reqBody, 'additional-tickets', (myTicket,))
 
-            now = datetime.datetime.utcnow() + datetime.timedelta(days=1)
+            now = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=1)
 
             reqBody['till'] = KerberosTime.to_asn1(now)
             reqBody['nonce'] = random.getrandbits(31)
@@ -375,7 +377,7 @@ class GETST:
 
         seq_set(authenticator, 'cname', clientName.components_to_asn1)
 
-        now = datetime.datetime.utcnow()
+        now = datetime.datetime.now(datetime.timezone.utc)
         authenticator['cusec'] = now.microsecond
         authenticator['ctime'] = KerberosTime.to_asn1(now)
 
@@ -414,7 +416,7 @@ class GETST:
         clientName = Principal(self.__options.impersonate, type=constants.PrincipalNameType.NT_PRINCIPAL.value)
 
         S4UByteArray = struct.pack('<I', constants.PrincipalNameType.NT_PRINCIPAL.value)
-        S4UByteArray += b(self.__options.impersonate) + b(self.__domain) + b'Kerberos'
+        S4UByteArray += ensure_binary(self.__options.impersonate) + ensure_binary(self.__domain) + b'Kerberos'
 
         if logging.getLogger().level == logging.DEBUG:
             logging.debug('S4UByteArray')
@@ -472,7 +474,7 @@ class GETST:
         seq_set(reqBody, 'sname', serverName.components_to_asn1)
         reqBody['realm'] = str(decodedTGT['crealm'])
 
-        now = datetime.datetime.utcnow() + datetime.timedelta(days=1)
+        now = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=1)
 
         reqBody['till'] = KerberosTime.to_asn1(now)
         reqBody['nonce'] = random.getrandbits(31)
@@ -602,7 +604,7 @@ class GETST:
 
         seq_set(authenticator, 'cname', clientName.components_to_asn1)
 
-        now = datetime.datetime.utcnow()
+        now = datetime.datetime.now(datetime.timezone.utc)
         authenticator['cusec'] = now.microsecond
         authenticator['ctime'] = KerberosTime.to_asn1(now)
 
@@ -654,7 +656,7 @@ class GETST:
         myTicket = ticket.to_asn1(TicketAsn1())
         seq_set_iter(reqBody, 'additional-tickets', (myTicket,))
 
-        now = datetime.datetime.utcnow() + datetime.timedelta(days=1)
+        now = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=1)
 
         reqBody['till'] = KerberosTime.to_asn1(now)
         reqBody['nonce'] = random.getrandbits(31)
@@ -682,7 +684,7 @@ class GETST:
         if TGT is not None:
             tgt, cipher, sessionKey = TGT['KDC_REP'], TGT['cipher'], TGT['sessionKey']
             oldSessionKey = sessionKey
-
+            
         if tgt is None:
             # Still no TGT
             userName = Principal(self.__user, type=constants.PrincipalNameType.NT_PRINCIPAL.value)
@@ -695,10 +697,16 @@ class GETST:
 
         # Ok, we have valid TGT, let's try to get a service ticket
         if self.__options.impersonate is None:
+
+            if self.__options.renew is True:
+                logging.info("Renewing TGT")
+
             # Normal TGS interaction
-            logging.info('Getting ST for user')
+            else:
+                logging.info('Getting ST for user')
+
             serverName = Principal(self.__options.spn, type=constants.PrincipalNameType.NT_SRV_INST.value)
-            tgs, cipher, oldSessionKey, sessionKey = getKerberosTGS(serverName, domain, self.__kdcHost, tgt, cipher, sessionKey)
+            tgs, cipher, oldSessionKey, sessionKey = getKerberosTGS(serverName, domain, self.__kdcHost, tgt, cipher, sessionKey, self.__options.renew)
             self.__saveFileName = self.__user
         else:
             # Here's the rock'n'roll
@@ -746,6 +754,7 @@ if __name__ == '__main__':
                                                                         'S4U2Self to be forwardable. For best results, the -hashes and -aesKey values for the '
                                                                         'specified -identity should be provided. This allows impresonation of protected users '
                                                                         'and bypass of "Kerberos-only" constrained delegation restrictions. See CVE-2020-17049')
+    parser.add_argument('-renew', action='store_true', help='Sets the RENEW ticket option to renew the TGT used for authentication. Set -spn to \'krbtgt/DOMAINFQDN\'')
 
     group = parser.add_argument_group('authentication')
 
@@ -788,30 +797,15 @@ if __name__ == '__main__':
         # the request would also need to embed an additional-ticket (the target user's TGT)
 
     # Init the example's logger theme
-    logger.init(options.ts)
+    logger.init(options.ts, options.debug)
 
-    if options.debug is True:
-        logging.getLogger().setLevel(logging.DEBUG)
-        # Print the Library's installation path
-        logging.debug(version.getInstallationPath())
-    else:
-        logging.getLogger().setLevel(logging.INFO)
+    domain, username, password, _, _, options.k = parse_identity(options.identity, options.hashes, options.no_pass, options.aesKey, options.k)
 
-    domain, username, password = parse_credentials(options.identity)
+    if domain == '':
+        logging.critical('Domain should be specified!')
+        sys.exit(1)
 
     try:
-        if domain is None:
-            logging.critical('Domain should be specified!')
-            sys.exit(1)
-
-        if password == '' and username != '' and options.hashes is None and options.no_pass is False and options.aesKey is None:
-            from getpass import getpass
-
-            password = getpass("Password:")
-
-        if options.aesKey is not None:
-            options.k = True
-
         executer = GETST(username, password, domain, options)
         executer.run()
     except Exception as e:
