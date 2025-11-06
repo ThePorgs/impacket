@@ -221,6 +221,9 @@ def start_servers(options, threads):
         c.setAltName(options.altname)
         c.setisADMINAttack(options.adminservice, options.logonname, options.displayname, options.objectsid)
 
+        c.setIsSCCMAttack(options.sccm)
+        c.setSCCMOptions(options.sccm_device, options.sccm_fqdn, options.sccm_server, options.sccm_sleep)
+
         #If the redirect option is set, configure the HTTP server to redirect targets to SMB
         if server is HTTPRelayServer and options.r is not None:
             c.setMode('REDIRECT')
@@ -438,6 +441,13 @@ if __name__ == '__main__':
     sccmdpoptions.add_argument('--sccm-dp', action='store_true', required=False, help='Enable SCCM Distribution Point attack. Perform package file dump from an SCCM Distribution Point. Expects as target \'http://<DP>/sms_dp_smspkg$/Datalib\'')
     sccmdpoptions.add_argument('--sccm-dp-extensions', action='store', required=False, help='A custom list of extensions to look for when downloading files from the SCCM Distribution Point. If not provided, defaults to .ps1,.bat,.xml,.txt,.pfx')
     sccmdpoptions.add_argument('--sccm-dp-files', action='store', required=False, help='The path to a file containing a list of specific URLs to download from the Distribution Point, instead of downloading by extensions. Providing this argument will skip file indexing')
+
+    sccmoptions = parser.add_argument_group("SCCM attack options")
+    sccmoptions.add_argument('--sccm', action='store_true', required=False, help='Enable SCCM relay attack')
+    sccmoptions.add_argument('--sccm-device', action='store', metavar="DEVICE", required=False, help='Name of fake device to register')
+    sccmoptions.add_argument('--sccm-fqdn', action='store', metavar="FQDN", required=False, help='Fully qualified domain name of the target domain')
+    sccmoptions.add_argument('--sccm-server', action='store', metavar="HOSTNAME", required=False, help='Hostname of the target SCCM server')
+    sccmoptions.add_argument('--sccm-sleep', action='store', metavar="SECONDS", type=int, default=5, required=False, help='Sleep time before requesting policy')
 
     try:
        options = parser.parse_args()

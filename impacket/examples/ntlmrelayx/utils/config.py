@@ -121,6 +121,13 @@ class NTLMRelayxConfig:
         self.SCCMDPExtensions = None
         self.SCCMDPFiles = None
 
+         # SCCM attack options
+        self.isSCCMAttack = False
+        self.sccm_device = None
+        self.sccm_fqdn = None
+        self.sccm_server = None
+        self._sccm_sleep = 5
+
     def setSMBChallenge(self, value):
         self.SMBServerChallenge = value
 
@@ -298,6 +305,15 @@ class NTLMRelayxConfig:
     def setSCCMAdminToken(self, token):
         self.sccmAdminToken = token
 
+    def setIsSCCMAttack(self, isSCCMAttack):
+        self.isSCCMAttack = isSCCMAttack
+
+    def setSCCMOptions(self, device, fqdn, server, sleep_time):
+        self.sccm_device = device
+        self.sccm_fqdn = fqdn
+        self.sccm_server = server
+        self.sccm_sleep = sleep_time
+        
 def parse_listening_ports(value):
     ports = set()
     for entry in value.split(","):
