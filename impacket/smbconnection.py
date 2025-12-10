@@ -1,8 +1,6 @@
 # Impacket - Collection of Python classes for working with network protocols.
 #
-# Copyright Fortra, LLC and its affiliated companies 
-#
-# All rights reserved.
+# Copyright (C) 2023 Fortra. All rights reserved.
 #
 # This software is provided under a slightly modified version
 # of the Apache Software License. See the accompanying LICENSE file
@@ -383,7 +381,7 @@ class SMBConnection:
         dce = rpctransport.get_dce_rpc()
         dce.connect()
         dce.bind(srvs.MSRPC_UUID_SRVS)
-        resp = srvs.hNetrShareEnum(dce, 1, serverName="\\\\" + self.getRemoteHost())
+        resp = srvs.hNetrShareEnum(dce, 1)
         return resp['InfoStruct']['ShareInfo']['Level1']['Buffer']
 
     def listPath(self, shareName, path, password = None):
@@ -791,7 +789,7 @@ class SMBConnection:
                 # if share access mode is none, let's the underlying API deals with it
                 return self._SMBConnection.stor_file(shareName, pathName, callback)
             else:
-                return self._SMBConnection.stor_file(shareName, pathName, callback, shareAccessMode=shareAccessMode)
+                return self._SMBConnection.stor_file(shareName, pathName, callback, shareAccessMode)
         except (smb.SessionError, smb3.SessionError) as e:
             raise SessionError(e.get_error_code(), e.get_error_packet())
 
@@ -988,7 +986,7 @@ class SessionError(Exception):
         return self.packet
 
     def getErrorString( self ):
-        return nt_errors.ERROR_MESSAGES[self.error]
+        return str(self)
 
     def __str__( self ):
         key = self.error

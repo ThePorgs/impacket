@@ -1,9 +1,7 @@
 #!/usr/bin/env python
 # Impacket - Collection of Python classes for working with network protocols.
 #
-# Copyright Fortra, LLC and its affiliated companies 
-#
-# All rights reserved.
+# Copyright (C) 2023 Fortra. All rights reserved.
 #
 # This software is provided under a slightly modified version
 # of the Apache Software License. See the accompanying LICENSE file
@@ -91,7 +89,7 @@ class SAMRDump:
         # Display results.
 
         if self.__csvOutput is True:
-            print('#Name,RID,FullName,PrimaryGroupId,BadPasswordCount,LogonCount,PasswordLastSet,PasswordDoesNotExpire,AccountIsDisabled,AdminComment,UserComment,ScriptPath')
+            print('#Name,RID,FullName,PrimaryGroupId,BadPasswordCount,LogonCount,PasswordLastSet,PasswordDoesNotExpire,AccountIsDisabled,UserComment,ScriptPath')
 
         for entry in entries:
             (username, uid, user) = entry
@@ -112,14 +110,13 @@ class SAMRDump:
                 accountDisabled = 'False'
 
             if self.__csvOutput is True:
-                print('%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s' % (username, uid, user['FullName'], user['PrimaryGroupId'],
+                print('%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s' % (username, uid, user['FullName'], user['PrimaryGroupId'],
                                                       user['BadPasswordCount'], user['LogonCount'],pwdLastSet,
-                                                      dontExpire, accountDisabled, user['UserComment'].replace(',','.'),user['AdminComment'].replace(',','.'),
+                                                      dontExpire, accountDisabled, user['UserComment'].replace(',','.'),
                                                       user['ScriptPath']  ))
             else:
                 base = "%s (%d)" % (username, uid)
                 print(base + '/FullName:', user['FullName'])
-                print(base + '/AdminComment:', user['AdminComment'])
                 print(base + '/UserComment:', user['UserComment'])
                 print(base + '/PrimaryGroupId:', user['PrimaryGroupId'])
                 print(base + '/BadPasswordCount:', user['BadPasswordCount'])
@@ -237,7 +234,14 @@ if __name__ == '__main__':
     options = parser.parse_args()
 
     # Init the example's logger theme
-    logger.init(options.ts, options.debug)
+    logger.init(options.ts)
+
+    if options.debug is True:
+        logging.getLogger().setLevel(logging.DEBUG)
+        # Print the Library's installation path
+        logging.debug(version.getInstallationPath())
+    else:
+        logging.getLogger().setLevel(logging.INFO)
 
     domain, username, password, remoteName = parse_target(options.target)
 

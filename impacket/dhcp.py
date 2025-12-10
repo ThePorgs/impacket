@@ -1,8 +1,6 @@
 # Impacket - Collection of Python classes for working with network protocols.
 #
-# Copyright Fortra, LLC and its affiliated companies 
-#
-# All rights reserved.
+# Copyright (C) 2023 Fortra. All rights reserved.
 #
 # This software is provided under a slightly modified version
 # of the Apache Software License. See the accompanying LICENSE file
@@ -178,7 +176,7 @@ class DhcpPacket(ProtocolPacket, structure.Structure):
             # size = self.calcUnpackSize(format, options[i+1:])
             size = options[i+1]
             # print i, name, format, size
-            value = self.unpack(format, bytes(options[i+2:i+2+size]))
+            value = self.unpack(format, options[i+2:i+2+size])
             answer.append((name, value))
             i += 2+size
 

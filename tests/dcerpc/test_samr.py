@@ -1,8 +1,6 @@
 # Impacket - Collection of Python classes for working with network protocols.
 #
-# Copyright Fortra, LLC and its affiliated companies 
-#
-# All rights reserved.
+# Copyright (C) 2023 Fortra. All rights reserved.
 #
 # This software is provided under a slightly modified version
 # of the Apache Software License. See the accompanying LICENSE file
@@ -2272,7 +2270,7 @@ class SAMRTests(DCERPCTests):
 
         oldPwd = 'ADMIN'
         oldPwdHashNT = ntlm.NTOWFv1(oldPwd)
-        newPwd = "".join([random.choice(string.ascii_letters) for i in range(15)]) + "❤️🤷‍♂️😈"
+        newPwd = "".join([random.choice(string.ascii_letters) for i in range(15)])
         newPwdHashNT = ntlm.NTOWFv1(newPwd)
 
         try:
@@ -2285,9 +2283,8 @@ class SAMRTests(DCERPCTests):
         request['ServerName'] = ''
         request['UserName'] = self.test_account
         samUser = samr.SAMPR_USER_PASSWORD()
-        encoded_password = newPwd.encode('utf-16le')
-        samUser['Buffer'] = b'A'*(512-len(encoded_password)) + encoded_password
-        samUser['Length'] = len(encoded_password)
+        samUser['Buffer'] = b'A'*(512-len(newPwd)*2) + newPwd.encode('utf-16le')
+        samUser['Length'] = len(newPwd)*2
         pwdBuff = samUser.getData()
 
         rc4 = ARC4.new(oldPwdHashNT)

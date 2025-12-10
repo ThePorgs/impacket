@@ -1,8 +1,6 @@
 # Impacket - Collection of Python classes for working with network protocols.
 #
-# Copyright Fortra, LLC and its affiliated companies 
-#
-# All rights reserved.
+# Copyright (C) 2023 Fortra. All rights reserved.
 #
 # This software is provided under a slightly modified version
 # of the Apache Software License. See the accompanying LICENSE file
@@ -137,7 +135,6 @@ class MessageID(univ.Integer):
 
 
 class LDAPString(univ.OctetString):
-    # LDAPString ::= OCTET STRING -- UTF-8 encoded, -- [ISO10646] characters
     encoding = 'utf-8'
 
 
@@ -158,13 +155,11 @@ class AttributeDescription(LDAPString):
 
 
 class AttributeValue(univ.OctetString):
-    # AttributeValue ::= OCTET STRING
-    encoding = 'utf-8'
+    pass
 
 
 class AssertionValue(univ.OctetString):
-    # AssertionValue ::= OCTET STRING
-    encoding = 'utf-8'
+    pass
 
 
 class MatchingRuleID(LDAPString):

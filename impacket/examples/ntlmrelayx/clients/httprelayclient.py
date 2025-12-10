@@ -1,8 +1,6 @@
 # Impacket - Collection of Python classes for working with network protocols.
 #
-# Copyright Fortra, LLC and its affiliated companies 
-#
-# All rights reserved.
+# Copyright (C) 2023 Fortra. All rights reserved.
 #
 # This software is provided under a slightly modified version
 # of the Apache Software License. See the accompanying LICENSE file
@@ -51,15 +49,11 @@ class HTTPRelayClient(ProtocolClient):
             self.path = '/'
         else:
             self.path = self.target.path
-        self.query = self.target.query
         return True
 
     def sendNegotiate(self,negotiateMessage):
         #Check if server wants auth
-        if self.query:
-            self.session.request('GET', self.path + '?' + self.query)
-        else:
-            self.session.request('GET', self.path)
+        self.session.request('GET', self.path)
         res = self.session.getresponse()
         res.read()
         if res.status != 401:
@@ -83,10 +77,7 @@ class HTTPRelayClient(ProtocolClient):
         #Negotiate auth
         negotiate = base64.b64encode(negotiateMessage).decode("ascii")
         headers = {'Authorization':'%s %s' % (self.authenticationMethod, negotiate)}
-        if self.query:
-            self.session.request('GET', self.path + '?' + self.query, headers=headers)
-        else:
-            self.session.request('GET', self.path, headers=headers)
+        self.session.request('GET', self.path ,headers=headers)
         res = self.session.getresponse()
         res.read()
         try:
@@ -107,10 +98,7 @@ class HTTPRelayClient(ProtocolClient):
             token = authenticateMessageBlob
         auth = base64.b64encode(token).decode("ascii")
         headers = {'Authorization':'%s %s' % (self.authenticationMethod, auth)}
-        if self.query:
-            self.session.request('GET', self.path + '?' + self.query, headers=headers)
-        else:
-            self.session.request('GET', self.path, headers=headers)
+        self.session.request('GET', self.path,headers=headers)
         res = self.session.getresponse()
         if res.status == 401:
             return None, STATUS_ACCESS_DENIED
@@ -142,7 +130,6 @@ class HTTPSRelayClient(HTTPRelayClient):
             self.path = '/'
         else:
             self.path = self.target.path
-        self.query = self.target.query
         try:
             uv_context = ssl.SSLContext(ssl.PROTOCOL_SSLv23)
             self.session = HTTPSConnection(self.targetHost,self.targetPort, context=uv_context)

@@ -1,9 +1,7 @@
 #!/usr/bin/env python
 # Impacket - Collection of Python classes for working with network protocols.
 #
-# Copyright Fortra, LLC and its affiliated companies 
-#
-# All rights reserved.
+# Copyright (C) 2023 Fortra. All rights reserved.
 #
 # This software is provided under a slightly modified version
 # of the Apache Software License. See the accompanying LICENSE file
@@ -43,13 +41,14 @@ from impacket import version
 from impacket.dcerpc.v5.samr import UF_ACCOUNTDISABLE, UF_TRUSTED_FOR_DELEGATION, \
     UF_TRUSTED_TO_AUTHENTICATE_FOR_DELEGATION
 from impacket.examples import logger
-from impacket.examples.utils import parse_identity, ldap_login
+from impacket.examples.utils import parse_credentials
 from impacket.krb5 import constants
 from impacket.krb5.asn1 import TGS_REP, AS_REP
 from impacket.krb5.ccache import CCache
 from impacket.krb5.kerberosv5 import getKerberosTGT, getKerberosTGS
 from impacket.krb5.types import Principal
 from impacket.ldap import ldap, ldapasn1
+from impacket.smbconnection import SMBConnection, SessionError
 from impacket.ntlm import compute_lmhash, compute_nthash
 
 
@@ -91,7 +90,6 @@ class GetUserSPNs:
         self.__saveTGS = cmdLineOptions.save
         self.__requestUser = cmdLineOptions.request_user
         self.__stealth = cmdLineOptions.stealth
-        self.__rc4 = cmdLineOptions.rc4
         if cmdLineOptions.hashes is not None:
             self.__lmhash, self.__nthash = cmdLineOptions.hashes.split(':')
 
@@ -109,6 +107,29 @@ class GetUserSPNs:
             logging.warning('KDC IP address and hostname will be ignored because of cross-domain targeting.')
             self.__kdcIP = None
             self.__kdcHost = None
+
+    def getMachineName(self, target):
+        try:
+            s = SMBConnection(target, target)
+            s.login('', '')
+        except OSError as e:
+            if str(e).find('timed out') > 0:
+                raise Exception('The connection is timed out. Probably 445/TCP port is closed. Try to specify '
+                                'corresponding NetBIOS name or FQDN as the value of the -dc-host option')
+            else:
+                raise
+        except SessionError as e:
+            if str(e).find('STATUS_NOT_SUPPORTED') > 0:
+                raise Exception('The SMB request is not supported. Probably NTLM is disabled. Try to specify '
+                                'corresponding NetBIOS name or FQDN as the value of the -dc-host option')
+            else:
+                raise
+        except Exception:
+            if s.getServerName() == '':
+                raise Exception('Error while anonymous logging into %s' % target)
+        else:
+            s.logoff()
+        return "%s.%s" % (s.getServerName(), s.getServerDNSDomainName())
 
     @staticmethod
     def getUnixTime(t):
@@ -232,10 +253,46 @@ class GetUserSPNs:
             self.request_users_file_TGSs()
             return
 
+        if self.__kdcHost is not None and self.__targetDomain == self.__domain:
+            self.__target = self.__kdcHost
+        else:
+            if self.__kdcIP is not None and self.__targetDomain == self.__domain:
+                self.__target = self.__kdcIP
+            else:
+                self.__target = self.__targetDomain
+
+            if self.__doKerberos:
+                logging.info('Getting machine hostname')
+                self.__target = self.getMachineName(self.__target)
+
         # Connect to LDAP
-        ldapConnection = ldap_login(self.__target, self.baseDN, self.__kdcIP, self.__kdcHost, self.__doKerberos, self.__username, self.__password, self.__domain, self.__lmhash, self.__nthash, self.__aesKey, target_domain=self.__targetDomain, fqdn=True)
-        # updating "self.__target" as it may have changed in the ldap_login processing
-        self.__target = ldapConnection._dstHost
+        try:
+            ldapConnection = ldap.LDAPConnection('ldap://%s' % self.__target, self.baseDN, self.__kdcIP)
+            if self.__doKerberos is not True:
+                ldapConnection.login(self.__username, self.__password, self.__domain, self.__lmhash, self.__nthash)
+            else:
+                ldapConnection.kerberosLogin(self.__username, self.__password, self.__domain, self.__lmhash,
+                                             self.__nthash,
+                                             self.__aesKey, kdcHost=self.__kdcIP)
+        except ldap.LDAPSessionError as e:
+            if str(e).find('strongerAuthRequired') >= 0:
+                # We need to try SSL
+                ldapConnection = ldap.LDAPConnection('ldaps://%s' % self.__target, self.baseDN, self.__kdcIP)
+                if self.__doKerberos is not True:
+                    ldapConnection.login(self.__username, self.__password, self.__domain, self.__lmhash, self.__nthash)
+                else:
+                    ldapConnection.kerberosLogin(self.__username, self.__password, self.__domain, self.__lmhash,
+                                                 self.__nthash,
+                                                 self.__aesKey, kdcHost=self.__kdcIP)
+            else:
+                if str(e).find('NTLMAuthNegotiate') >= 0:
+                    logging.critical("NTLM negotiation failed. Probably NTLM is disabled. Try to use Kerberos "
+                                     "authentication instead.")
+                else:
+                    if self.__kdcIP is not None and self.__kdcHost is not None:
+                        logging.critical("If the credentials are valid, check the hostname and IP address of KDC. They "
+                                         "must match exactly each other")
+                raise
 
         # Building the search filter
         filter_spn = "servicePrincipalName=*"
@@ -253,9 +310,6 @@ class GetUserSPNs:
 
         if self.__requestUser is not None:
             searchFilter += '(sAMAccountName:=%s)' % self.__requestUser
-
-        if self.__rc4 is True:
-            searchFilter += '(!(msds-supportedencryptiontypes:1.2.840.113556.1.4.804:=24))'
 
         searchFilter += ')'
 
@@ -451,7 +505,6 @@ if __name__ == '__main__':
                         help='Output filename to write ciphers in JtR/hashcat format. Auto selects -request')
     parser.add_argument('-ts', action='store_true', help='Adds timestamp to every logging output.')
     parser.add_argument('-debug', action='store_true', help='Turn DEBUG output ON')
-    parser.add_argument('-rc4', action='store_true', default=False, help='Only requests users who do not support AES (avoid MDI downgrade detection)')
 
     group = parser.add_argument_group('authentication')
 
@@ -481,14 +534,21 @@ if __name__ == '__main__':
     options = parser.parse_args()
 
     # Init the example's logger theme
-    logger.init(options.ts, options.debug)
+    logger.init(options.ts)
 
     if options.no_preauth and options.usersfile is None:
         logging.error('You have to specify -usersfile when -no-preauth is supplied. Usersfile must contain'
                       ' a list of SPNs and/or sAMAccountNames to Kerberoast.')
         sys.exit(1)
 
-    userDomain, username, password, _, _, options.k = parse_identity(options.target, options.hashes, options.no_pass, options.aesKey, options.k)
+    if options.debug is True:
+        logging.getLogger().setLevel(logging.DEBUG)
+        # Print the Library's installation path
+        logging.debug(version.getInstallationPath())
+    else:
+        logging.getLogger().setLevel(logging.INFO)
+
+    userDomain, username, password = parse_credentials(options.target)
 
     if userDomain == '':
         logging.critical('userDomain should be specified!')
@@ -498,6 +558,14 @@ if __name__ == '__main__':
         targetDomain = options.target_domain
     else:
         targetDomain = userDomain
+
+    if password == '' and username != '' and options.hashes is None and options.no_pass is False and options.aesKey is None:
+        from getpass import getpass
+
+        password = getpass("Password:")
+
+    if options.aesKey is not None:
+        options.k = True
 
     if options.save is True or options.outputfile is not None:
         options.request = True

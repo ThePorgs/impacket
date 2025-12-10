@@ -1,8 +1,6 @@
 # Impacket - Collection of Python classes for working with network protocols.
 #
-# Copyright Fortra, LLC and its affiliated companies 
-#
-# All rights reserved.
+# Copyright (C) 2023 Fortra. All rights reserved.
 #
 # This software is provided under a slightly modified version
 # of the Apache Software License. See the accompanying LICENSE file
@@ -2613,7 +2611,7 @@ class IWbemClassObject(IRemUnknown):
     def createProperties(self, properties):
         for property in properties:
             # Do we have an object property?
-            if properties[property]['type'] == CIM_TYPE_ENUM.CIM_TYPE_OBJECT.value and properties[property]['value'] != None:
+            if properties[property]['type'] == CIM_TYPE_ENUM.CIM_TYPE_OBJECT.value:
                 # Yes.. let's create an Object for it too
                 objRef = OBJREF_CUSTOM()
                 objRef['iid'] = self._iid

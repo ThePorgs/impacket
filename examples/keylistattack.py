@@ -1,9 +1,7 @@
 #!/usr/bin/env python
 # Impacket - Collection of Python classes for working with network protocols.
 #
-# Copyright Fortra, LLC and its affiliated companies 
-#
-# All rights reserved.
+# Copyright (C) 2023 Fortra. All rights reserved.
 #
 # This software is provided under a slightly modified version
 # of the Apache Software License. See the accompanying LICENSE file
@@ -153,7 +151,6 @@ if __name__ == '__main__':
     parser.add_argument('-full', action='store_true', default=False, help='Run the attack against all domain users. '
                         'Noisy! It could lead to more TGS requests being rejected')
     parser.add_argument('-debug', action='store_true', help='Turn DEBUG output ON')
-    parser.add_argument('-ts', action='store_true', help='Adds timestamp to every logging output')
 
     group = parser.add_argument_group('LIST option')
     group.add_argument('-domain', action='store', help='The fully qualified domain name (only works with LIST)')
@@ -184,7 +181,13 @@ if __name__ == '__main__':
     options = parser.parse_args()
 
     # Init the example's logger theme
-    logger.init(options.ts, options.debug)
+    logger.init()
+
+    if options.debug is True:
+        logging.getLogger().setLevel(logging.DEBUG)
+        logging.debug(version.getInstallationPath())
+    else:
+        logging.getLogger().setLevel(logging.INFO)
 
     if options.rodcNo is None:
         logging.error("You must specify the RODC number (krbtgt_XXXXX)")

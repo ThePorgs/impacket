@@ -1,9 +1,7 @@
 #!/usr/bin/env python
 # Impacket - Collection of Python classes for working with network protocols.
 #
-# Copyright Fortra, LLC and its affiliated companies 
-#
-# All rights reserved.
+# Copyright (C) 2023 Fortra. All rights reserved.
 #
 # This software is provided under a slightly modified version
 # of the Apache Software License. See the accompanying LICENSE file
@@ -39,7 +37,7 @@ import argparse
 
 from impacket.http import AUTH_BASIC
 from impacket.examples import logger, rpcdatabase
-from impacket.examples.utils import parse_identity
+from impacket.examples.utils import parse_credentials
 from impacket import uuid, version
 from impacket.dcerpc.v5.epm import KNOWN_UUIDS
 from impacket.dcerpc.v5 import transport, rpcrt, epm
@@ -273,6 +271,8 @@ class RPCMap():
         print()
 
 if __name__ == '__main__':
+    # Init the example's logger theme
+    logger.init()
     print(version.BANNER)
 
     class SmartFormatter(argparse.HelpFormatter):
@@ -299,7 +299,6 @@ if __name__ == '__main__':
                                                                                  '(RPC_C_AUTHN_LEVEL_PKT_PRIVACY)')
     parser.add_argument('-uuid', action='store', help='Test only this UUID')
     parser.add_argument('-debug', action='store_true', help='Turn DEBUG output ON')
-    parser.add_argument('-ts', action='store_true', help='Adds timestamp to every logging output')
 
     group = parser.add_argument_group('ncacn-np-details')
 
@@ -321,15 +320,34 @@ if __name__ == '__main__':
         sys.exit(1)
  
     options = parser.parse_args()
-    # Init the example's logger theme
-    logger.init(options.ts, options.debug)
 
-    rpcdomain, rpcuser, rpcpass, _, _, _ = parse_identity(options.auth_rpc, options.hashes_rpc, options.no_pass, getpass_msg='Password for MSRPC communication:')
-    transportdomain, transportuser, transportpass, _, _, _ = parse_identity(options.auth_transport, options.hashes_transport, options.no_pass, getpass_msg='Password for RPC transport (SMB or HTTP):')
+    if options.debug is True:
+        logging.getLogger().setLevel(logging.DEBUG)
+        # Print the Library's installation path
+        logging.debug(version.getInstallationPath())
+    else:
+        logging.getLogger().setLevel(logging.INFO)
+
+    rpcdomain, rpcuser, rpcpass = parse_credentials(options.auth_rpc)
+    transportdomain, transportuser, transportpass = parse_credentials(options.auth_transport)
 
     if options.brute_opnums and options.brute_versions:
        logging.error("Specify only -brute-opnums or -brute-versions")
        sys.exit(1)
+
+    if rpcdomain is None:
+        rpcdomain = ''
+
+    if transportdomain is None:
+        transportdomain = ''
+
+    if rpcpass == '' and rpcuser != '' and options.hashes_rpc is None and options.no_pass is False:
+         from getpass import getpass
+         rpcpass = getpass("Password for MSRPC communication:")
+
+    if transportpass == '' and transportuser != '' and options.hashes_transport is None and options.no_pass is False:
+        from getpass import getpass
+        transportpass = getpass("Password for RPC transport (SMB or HTTP):")
 
     if options.uuid is not None:
         uuids = [uuid.string_to_uuidtup(options.uuid)]

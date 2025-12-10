@@ -1,8 +1,6 @@
 # Impacket - Collection of Python classes for working with network protocols.
 #
-# Copyright Fortra, LLC and its affiliated companies 
-#
-# All rights reserved.
+# Copyright (C) 2023 Fortra. All rights reserved.
 #
 # This software is provided under a slightly modified version
 # of the Apache Software License. See the accompanying LICENSE file
@@ -698,17 +696,13 @@ def packValue(valueType, value):
         retData = pack('>L', value)
     elif valueType == REG_EXPAND_SZ:
         try:
-            retData = checkNullString(value).encode('utf-16le')
+            retData = value.encode('utf-16le')
         except UnicodeDecodeError:
             import sys
             retData = value.decode(sys.getfilesystemencoding()).encode('utf-16le')
     elif valueType == REG_MULTI_SZ:
         try:
-            v = checkNullString(value)
-            # REG_MULTI_SZ must end with 2 null-bytes
-            if v[-2:-1] != '\x00':
-                v = v + '\x00'
-            retData = v.encode('utf-16le')
+            retData = value.encode('utf-16le')
         except UnicodeDecodeError:
             import sys
             retData = value.decode(sys.getfilesystemencoding()).encode('utf-16le')
@@ -718,7 +712,7 @@ def packValue(valueType, value):
         retData = pack('>Q', value)
     elif valueType == REG_SZ:
         try:
-            retData = checkNullString(value).encode('utf-16le')
+            retData = value.encode('utf-16le')
         except UnicodeDecodeError:
             import sys
             retData = value.decode(sys.getfilesystemencoding()).encode('utf-16le')

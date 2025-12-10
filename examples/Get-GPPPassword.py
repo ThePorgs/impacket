@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 # Impacket - Collection of Python classes for working with network protocols.
 #
-# Copyright Fortra, LLC and its affiliated companies 
-#
-# All rights reserved.
+# Copyright (C) 2023 Fortra. All rights reserved.
 #
 # This software is provided under a slightly modified version
 # of the Apache Software License. See the accompanying LICENSE file
@@ -257,6 +255,19 @@ def parse_target(args):
 
     return domain, username, password, address, lmhash, nthash
 
+
+def init_logger(args):
+    # Init the example's logger theme and debug level
+    logger.init(args.ts)
+    if args.debug is True:
+        logging.getLogger().setLevel(logging.DEBUG)
+        # Print the Library's installation path
+        logging.debug(version.getInstallationPath())
+    else:
+        logging.getLogger().setLevel(logging.INFO)
+        logging.getLogger("impacket.smbserver").setLevel(logging.ERROR)
+
+
 def init_smb_session(args, domain, username, password, address, lmhash, nthash):
     smbClient = SMBConnection(address, args.target_ip, sess_port=int(args.port))
     dialect = smbClient.getDialect()
@@ -282,7 +293,7 @@ def init_smb_session(args, domain, username, password, address, lmhash, nthash):
 if __name__ == '__main__':
     print(version.BANNER)
     args = parse_args()
-    logger.init(args.ts, args.debug)
+    init_logger(args)
 
     if args.target.upper() == "LOCAL":
         if args.xmlfile is not None:

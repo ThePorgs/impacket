@@ -1,8 +1,6 @@
 # Impacket - Collection of Python classes for working with network protocols.
 #
-# Copyright Fortra, LLC and its affiliated companies 
-#
-# All rights reserved.
+# Copyright (C) 2023 Fortra. All rights reserved.
 #
 # This software is provided under a slightly modified version
 # of the Apache Software License. See the accompanying LICENSE file
@@ -89,7 +87,7 @@ class SMBTests(RemoteTestCase):
         self.assertEqual(credentials, (self.username, self.password, self.domain, '', '', '', None, None))
         smb.logoff()
         del(smb)
-
+        
     def test_close_connection(self):
         smb = self.create_connection()
         smb.login(self.username, self.password, self.domain)
@@ -158,7 +156,7 @@ class SMBTests(RemoteTestCase):
         smb.deleteFile(self.share, self.file + '.bak')
         smb.disconnectTree(tid)
         smb.logoff()
-
+        
     def test_readwriteFile(self):
         smb = self.create_connection()
         smb.login(self.username, self.password, self.domain)
@@ -178,8 +176,9 @@ class SMBTests(RemoteTestCase):
         smb.closeFile(tid, fid)
         smb.deleteFile(self.share, self.file)
         smb.disconnectTree(tid)
+        
         smb.logoff()
-
+         
     def test_createdeleteDirectory(self):
         smb = self.create_connection()
         smb.login(self.username, self.password, self.domain)
@@ -195,7 +194,7 @@ class SMBTests(RemoteTestCase):
                 smb.deleteDirectory(self.share, nested_dir)
                 smb.deleteDirectory(self.share, self.directory)
         smb.logoff()
-
+ 
     def test_getData(self):
         smb = self.create_connection()
         smb.login(self.username, self.password, self.domain)
@@ -206,8 +205,6 @@ class SMBTests(RemoteTestCase):
         smb.getServerOS()
         smb.doesSupportNTLMv2()
         smb.isLoginRequired()
-        smb.isSigningRequired()
-        smb.getIOCapabilities()
         smb.logoff()
 
     def test_getServerName(self):
@@ -269,21 +266,7 @@ class SMBTests(RemoteTestCase):
         smb.login(self.username, self.password, self.domain)
         smb.getSessionKey()
         smb.logoff()
-
-    def test_queryInfo(self):
-        smb = self.create_connection()
-        smb.login(self.username, self.password, self.domain)
-        tid = smb.connectTree(self.share)
-        fid = smb.createFile(tid, self.file)
-        file_info = smb.queryInfo(tid, fid)
-        self.assertEqual(file_info["AllocationSize"], 0)
-        self.assertEqual(file_info["EndOfFile"], 0)
-        self.assertEqual(file_info["Directory"], 0)
-        smb.closeFile(tid,fid)
-        smb.deleteFile(self.share, self.file)
-        smb.disconnectTree(tid)
-        smb.logoff()
-
+        
     def __is_socket_opened(self, s):
         # We assume that if socket is selectable, it's open; and if it were not, it's closed.
         # Note: this method is accurate as long as the file descriptor used for the socket is not re-used

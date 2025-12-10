@@ -1,9 +1,7 @@
 #!/usr/bin/env python
 # Impacket - Collection of Python classes for working with network protocols.
 #
-# Copyright Fortra, LLC and its affiliated companies 
-#
-# All rights reserved.
+# Copyright (C) 2023 Fortra. All rights reserved.
 #
 # This software is provided under a slightly modified version
 # of the Apache Software License. See the accompanying LICENSE file
@@ -54,6 +52,8 @@ class MQTT_LOGIN:
         logging.info(CONNECT_ACK_ERROR_MSGS[0])
 
 if __name__ == '__main__':
+    # Init the example's logger theme
+    logger.init()
     print(version.BANNER)
     parser = argparse.ArgumentParser(add_help=False,
                                      description="MQTT login check")
@@ -63,7 +63,6 @@ if __name__ == '__main__':
     parser.add_argument('-ssl', action='store_true', help='turn SSL on')
     parser.add_argument('-port', action='store', default='1883', help='port to connect to (default 1883)')
     parser.add_argument('-debug', action='store_true', help='Turn DEBUG output ON')
-    parser.add_argument('-ts', action='store_true', help='Adds timestamp to every logging output')
 
     try:
         options = parser.parse_args()
@@ -71,8 +70,12 @@ if __name__ == '__main__':
         logging.error(str(e))
         sys.exit(1)
 
-    # Init the example's logger theme
-    logger.init(options.ts, options.debug)
+    if options.debug is True:
+        logging.getLogger().setLevel(logging.DEBUG)
+        # Print the Library's installation path
+        logging.debug(version.getInstallationPath())
+    else:
+        logging.getLogger().setLevel(logging.INFO)
 
     domain, username, password, address = parse_target(options.target)
 

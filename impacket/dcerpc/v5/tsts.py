@@ -1,8 +1,6 @@
 # Impacket - Collection of Python classes for working with network protocols.
 #
-# Copyright Fortra, LLC and its affiliated companies 
-#
-# All rights reserved.
+# Copyright (C) 2023 Fortra. All rights reserved.
 #
 # This software is provided under a slightly modified version
 # of the Apache Software License. See the accompanying LICENSE file
@@ -3669,9 +3667,7 @@ def hRpcWinStationOpenSessionDirectory(dce, hServer, pszServerName):
 ################################################################################
 
 class TSTSEndpoint:
-    def __init__(self, smb, target_ip, stringbinding, endpoint, kerberos):
-        self.__doKerberos = kerberos
-        self._target_ip = target_ip
+    def __init__(self, smb, target_ip, stringbinding, endpoint, kerberos = False):
         self._stringbinding = stringbinding.format(target_ip)
         self._endpoint = endpoint
         self._smbconnection = smb
@@ -3683,11 +3679,9 @@ class TSTSEndpoint:
         self._rpctransport = transport.DCERPCTransportFactory(self._stringbinding)
         self._rpctransport.set_smb_connection(self._smbconnection)
         self._dce = self._rpctransport.get_dce_rpc()
-        if self.__doKerberos:
-            self._dce.set_auth_type(RPC_C_AUTHN_GSS_NEGOTIATE)
-        self._dce.set_auth_level(RPC_C_AUTHN_LEVEL_PKT_PRIVACY)
-
+        self._dce.set_credentials(*self._rpctransport.get_credentials())
         self._dce.connect()
+        self._dce.set_auth_level(RPC_C_AUTHN_LEVEL_PKT_PRIVACY)
         self._dce.bind(self._endpoint)
         return self._dce
     def _disconnect(self):
@@ -3698,11 +3692,10 @@ class TSTSEndpoint:
         self._disconnect()
 
 class TermSrvSession(TSTSEndpoint):
-    def __init__(self, smb, target_ip, kerberos):
+    def __init__(self, smb, target_ip):
         super().__init__(smb, target_ip,
                             stringbinding = r'ncacn_np:{}[\pipe\LSM_API_service]',
-                            endpoint = TermSrvSession_UUID,
-                            kerberos = kerberos
+                            endpoint = TermSrvSession_UUID
         )
     hRpcOpenSession             = hRpcOpenSession
     hRpcCloseSession            = hRpcCloseSession
@@ -3722,11 +3715,10 @@ class TermSrvSession(TSTSEndpoint):
     hRpcGetSessionInformationEx = hRpcGetSessionInformationEx
 
 class TermSrvNotification(TSTSEndpoint):
-    def __init__(self, smb, target_ip, kerberos):
+    def __init__(self, smb, target_ip):
         super().__init__(smb, target_ip,
                             stringbinding = r'ncacn_np:{}[\pipe\LSM_API_service]',
-                            endpoint = TermSrvNotification_UUID,
-                            kerberos = kerberos
+                            endpoint = TermSrvNotification_UUID
         )
     hRpcWaitForSessionState         = hRpcWaitForSessionState
     hRpcRegisterAsyncNotification   = hRpcRegisterAsyncNotification
@@ -3734,11 +3726,10 @@ class TermSrvNotification(TSTSEndpoint):
     hRpcUnRegisterAsyncNotification = hRpcUnRegisterAsyncNotification
 
 class TermSrvEnumeration(TSTSEndpoint):
-    def __init__(self, smb, target_ip, kerberos):
+    def __init__(self, smb, target_ip):
         super().__init__(smb, target_ip,
                             stringbinding = r'ncacn_np:{}[\pipe\LSM_API_service]',
-                            endpoint      = TermSrvEnumeration_UUID,
-                            kerberos = kerberos
+                            endpoint      = TermSrvEnumeration_UUID
         )
     hRpcOpenEnum        = hRpcOpenEnum
     hRpcCloseEnum       = hRpcCloseEnum
@@ -3747,11 +3738,10 @@ class TermSrvEnumeration(TSTSEndpoint):
     hRpcGetAllSessions  = hRpcGetAllSessions
 
 class RCMPublic(TSTSEndpoint):
-    def __init__(self, smb, target_ip, kerberos):
+    def __init__(self, smb, target_ip):
         super().__init__(smb, target_ip,
                             stringbinding = r'ncacn_np:{}[\pipe\TermSrv_API_service]',
-                            endpoint = RCMPublic_UUID,
-                            kerberos = kerberos
+                            endpoint = RCMPublic_UUID
         )
     hRpcGetClientData    = hRpcGetClientData
     hRpcGetConfigData    = hRpcGetConfigData
@@ -3761,11 +3751,10 @@ class RCMPublic(TSTSEndpoint):
 
 
 class RcmListener(TSTSEndpoint):
-    def __init__(self, smb, target_ip, kerberos):
+    def __init__(self, smb, target_ip):
         super().__init__(smb, target_ip,
                             stringbinding = r'ncacn_np:{}[\pipe\TermSrv_API_service]',
-                            endpoint = RcmListener_UUID,
-                            kerberos = kerberos
+                            endpoint = RcmListener_UUID
         )
     hRpcOpenListener  = hRpcOpenListener
     hRpcCloseListener = hRpcCloseListener
@@ -3774,11 +3763,10 @@ class RcmListener(TSTSEndpoint):
     hRpcIsListening   = hRpcIsListening
 
 class LegacyAPI(TSTSEndpoint):
-    def __init__(self, smb, target_ip, kerberos):
+    def __init__(self, smb, target_ip):
         super().__init__(smb, target_ip,
                             stringbinding = r'ncacn_np:{}[\pipe\Ctx_WinStation_API_service]',
-                            endpoint = LegacyAPI_UUID,
-                            kerberos = kerberos
+                            endpoint = LegacyAPI_UUID
         )
     hRpcWinStationOpenServer             = hRpcWinStationOpenServer
     hRpcWinStationCloseServer            = hRpcWinStationCloseServer

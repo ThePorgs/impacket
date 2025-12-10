@@ -1,9 +1,7 @@
 #!/usr/bin/env python
 # Impacket - Collection of Python classes for working with network protocols.
 #
-# Copyright Fortra, LLC and its affiliated companies 
-#
-# All rights reserved.
+# Copyright (C) 2023 Fortra. All rights reserved.
 #
 # This software is provided under a slightly modified version
 # of the Apache Software License. See the accompanying LICENSE file
@@ -92,7 +90,7 @@ from impacket.dcerpc.v5.samr import NULL, GROUP_MEMBERSHIP, SE_GROUP_MANDATORY, 
 from pyasn1.codec.der import decoder, encoder
 from pyasn1.type.univ import noValue
 from impacket.examples import logger
-from impacket.examples.utils import parse_identity
+from impacket.examples.utils import parse_credentials
 from impacket.ntlm import LMOWFv1, NTOWFv1
 from impacket.dcerpc.v5.dtypes import RPC_SID, MAXIMUM_ALLOWED
 from impacket.dcerpc.v5.rpcrt import RPC_C_AUTHN_LEVEL_PKT_PRIVACY, RPC_C_AUTHN_GSS_NEGOTIATE
@@ -907,7 +905,7 @@ class RAISECHILD:
         encTicketPart = decoder.decode(plainText, asn1Spec = EncTicketPart())[0]
 
         # Let's extend the ticket's validity a lil bit
-        tenYearsFromNow = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=365*10)
+        tenYearsFromNow = datetime.datetime.utcnow() + datetime.timedelta(days=365*10)
         encTicketPart['endtime'] = KerberosTime.to_asn1(tenYearsFromNow)
         encTicketPart['renew-till'] = KerberosTime.to_asn1(tenYearsFromNow)
         #print encTicketPart.prettyPrint()
@@ -1293,13 +1291,27 @@ if __name__ == '__main__':
     options = parser.parse_args()
 
     # Init the example's logger theme
-    logger.init(options.ts, options.debug)
+    logger.init(options.ts)
 
-    domain, username, password, _, _, options.k = parse_identity(options.target, options.hashes, options.no_pass, options.aesKey, options.k)
+    domain, username, password = parse_credentials(options.target)
+
+    if options.debug is True:
+        logging.getLogger().setLevel(logging.DEBUG)
+        # Print the Library's installation path
+        logging.debug(version.getInstallationPath())
+    else:
+        logging.getLogger().setLevel(logging.INFO)
 
     if domain == '':
         logging.critical('Domain should be specified!')
         sys.exit(1)
+
+    if password == '' and username != '' and options.hashes is None and options.aesKey is None:
+        from getpass import getpass
+        password = getpass("Password:")
+
+    if options.aesKey is not None:
+        options.k = True
 
     commands = 'cmd.exe'
 

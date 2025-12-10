@@ -1,9 +1,7 @@
 #!/usr/bin/env python
 # Impacket - Collection of Python classes for working with network protocols.
 #
-# Copyright Fortra, LLC and its affiliated companies
-#
-# All rights reserved.
+# Copyright (C) 2023 Fortra. All rights reserved.
 #
 # This software is provided under a slightly modified version
 # of the Apache Software License. See the accompanying LICENSE file
@@ -30,7 +28,7 @@ if __name__ == '__main__':
     print(version.BANNER)
 
     parser = argparse.ArgumentParser(add_help = True, description = "This script will launch a SMB Server and add a "
-                                     "share specified as an argument. Usually, you need to be root in order to bind to port 445. "
+                                     "share specified as an argument. You need to be root in order to bind to port 445. "
                                      "For optional authentication, it is possible to specify username and password or the NTLM hash. "
                                      "Example: smbserver.py -comment 'My share' TMP /tmp")
 
@@ -44,9 +42,7 @@ if __name__ == '__main__':
     parser.add_argument('-debug', action='store_true', help='Turn DEBUG output ON')
     parser.add_argument('-ip', '--interface-address', action='store', default='0.0.0.0', help='ip address of listening interface')
     parser.add_argument('-port', action='store', default='445', help='TCP port for listening incoming connections (default 445)')
-    parser.add_argument('-dropssp', action='store_true', default=False, help='Disable NTLM ESS/SSP during negotiation')
     parser.add_argument('-smb2support', action='store_true', default=False, help='SMB2 Support (experimental!)')
-    parser.add_argument('-outputfile', action='store', default=None, help='Output file to log smbserver output messages')
 
     if len(sys.argv)==1:
         parser.print_help()
@@ -58,7 +54,14 @@ if __name__ == '__main__':
        logging.critical(str(e))
        sys.exit(1)
 
-    logger.init(options.ts, options.debug)
+    logger.init(options.ts)
+
+    if options.debug is True:
+        logging.getLogger().setLevel(logging.DEBUG)
+        # Print the Library's installation path
+        logging.debug(version.getInstallationPath())
+    else:
+        logging.getLogger().setLevel(logging.INFO)
 
     if options.comment is None:
         comment = ''
@@ -67,13 +70,8 @@ if __name__ == '__main__':
 
     server = smbserver.SimpleSMBServer(listenAddress=options.interface_address, listenPort=int(options.port))
 
-    if options.outputfile:
-        logging.info('Switching output to file %s' % options.outputfile)
-        server.setLogFile(options.outputfile)
-
     server.addShare(options.shareName.upper(), options.sharePath, comment)
     server.setSMB2Support(options.smb2support)
-    server.setDropSSP(options.dropssp)
 
     # If a user was specified, let's add it to the credentials for the SMBServer. If no user is specified, anonymous
     # connections will be allowed
@@ -99,9 +97,9 @@ if __name__ == '__main__':
     # e.g. server.setSMBChallenge('12345678abcdef00')
     server.setSMBChallenge('')
 
+    # If you don't want log to stdout, comment the following line
+    # If you want log dumped to a file, enter the filename
+    server.setLogFile('')
+
     # Rock and roll
-    try:
-        server.start()
-    except KeyboardInterrupt:
-        print("\nInterrupted, exiting...")
-        sys.exit(130)
+    server.start()

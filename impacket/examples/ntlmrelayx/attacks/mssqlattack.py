@@ -1,8 +1,6 @@
 # Impacket - Collection of Python classes for working with network protocols.
 #
-# Copyright Fortra, LLC and its affiliated companies 
-#
-# All rights reserved.
+# Copyright (C) 2023 Fortra. All rights reserved.
 #
 # This software is provided under a slightly modified version
 # of the Apache Software License. See the accompanying LICENSE file
@@ -45,9 +43,13 @@ class MSSQLAttack(ProtocolAttack):
         if self.config.queries is not None:
             for query in self.config.queries:
                 LOG.info('Executing SQL: %s' % query)
-                self.client.sql_query(query)
-                self.client.printReplies()
-                self.client.printRows()
+                try:
+                    self.client.sql_query(query)
+                    self.client.printReplies()
+                    self.client.printRows()
+                finally:
+                    if(self.client.lastError):
+                        print(self.client.lastError)
         else:
             LOG.error('No SQL queries specified for MSSQL relay!')
 

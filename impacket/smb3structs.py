@@ -1,8 +1,6 @@
 # Impacket - Collection of Python classes for working with network protocols.
 #
-# Copyright Fortra, LLC and its affiliated companies 
-#
-# All rights reserved.
+# Copyright (C) 2023 Fortra. All rights reserved.
 #
 # This software is provided under a slightly modified version
 # of the Apache Software License. See the accompanying LICENSE file
@@ -1494,12 +1492,6 @@ class FILE_ALL_INFORMATION(Structure):
         ('ModeInformation',':',FILE_MODE_INFORMATION),
         ('AlignmentInformation',':',FILE_ALIGNMENT_INFORMATION),
         ('NameInformation',':',FILE_NAME_INFORMATION),
-    )
-
-class FILE_ATTRIBUTE_TAG_INFORMATION(Structure):
-    structure = (
-        ('FileAttributes','<L'),
-        ('ReparseTag','<L=0'),
     )
 
 # SMB2_SET_INFO

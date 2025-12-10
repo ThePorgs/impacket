@@ -1,8 +1,6 @@
 # Impacket - Collection of Python classes for working with network protocols.
 #
-# Copyright Fortra, LLC and its affiliated companies 
-#
-# All rights reserved.
+# Copyright (C) 2023 Fortra. All rights reserved.
 #
 # This software is provided under a slightly modified version
 # of the Apache Software License. See the accompanying LICENSE file
@@ -3097,12 +3095,9 @@ def hNetrShareDel(dce, netName):
     request['NetName'] = netName
     return dce.request(request)
 
-def hNetrShareEnum(dce, level, resumeHandle = 0, preferedMaximumLength = 0xffffffff, serverName = '\x00'):
-    # serverName example: "\\\\1.2.3.4\x00"
-    if serverName[-1] != '\x00':
-        serverName += '\x00'  # final NULL byte is mandatory
+def hNetrShareEnum(dce, level, resumeHandle = 0, preferedMaximumLength = 0xffffffff):
     request = NetrShareEnum()
-    request['ServerName'] = serverName
+    request['ServerName'] = '\x00'
     request['PreferedMaximumLength'] = preferedMaximumLength
     request['ResumeHandle'] = resumeHandle
     request['InfoStruct']['Level'] = level
