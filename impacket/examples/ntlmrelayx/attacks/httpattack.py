@@ -21,14 +21,13 @@ from impacket.examples.ntlmrelayx.attacks import ProtocolAttack
 from impacket.examples.ntlmrelayx.attacks.httpattacks.adcsattack import ADCSAttack
 from impacket.examples.ntlmrelayx.attacks.httpattacks.sccmpoliciesattack import SCCMPoliciesAttack
 from impacket.examples.ntlmrelayx.attacks.httpattacks.sccmdpattack import SCCMDPAttack
-from impacket.examples.ntlmrelayx.attacks.httpattacks.sccmclientpushattack import SCCMClientPushAttack
 
 
 
 PROTOCOL_ATTACK_CLASS = "HTTPAttack"
 
 
-class HTTPAttack(ProtocolAttack, ADCSAttack, SCCMPoliciesAttack, SCCMDPAttack, SCCMClientPushAttack):
+class HTTPAttack(ProtocolAttack, ADCSAttack, SCCMPoliciesAttack, SCCMDPAttack):
     """
     This is the default HTTP attack. This attack only dumps the root page, though
     you can add any complex attack below. self.client is an instance of urrlib.session
@@ -45,8 +44,6 @@ class HTTPAttack(ProtocolAttack, ADCSAttack, SCCMPoliciesAttack, SCCMDPAttack, S
             SCCMPoliciesAttack._run(self)
         elif self.config.isSCCMDPAttack:
             SCCMDPAttack._run(self)
-        elif self.config.isSCCMClientPushAttack:
-            SCCMClientPushAttack._run(self)    
         else:
             # Default action: Dump requested page to file, named username-targetname.html
             # You can also request any page on the server via self.client.session,
