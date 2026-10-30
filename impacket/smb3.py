@@ -1927,18 +1927,18 @@ class SMB3:
                     offset  += len(data)
                     callback(data)
         except Exception:
-+            readFailed = True
-+            raise
+            readFailed = True
+            raise
         finally:
             if readFailed:
-+                try:
-+                    self._NetBIOSSession.close()
-+                except Exception:
-+                    pass
-+            else:
-+                if fileId is not None:
-+                    self.close(treeId, fileId)
-+                self.disconnectTree(treeId)
+                try:
+                    self._NetBIOSSession.close()
+                except Exception:
+                    pass
+            else:
+                if fileId is not None:
+                    self.close(treeId, fileId)
+                self.disconnectTree(treeId)
 
     def storeFile(self, shareName, path, callback, mode = FILE_OVERWRITE_IF, offset = 0, password = None, shareAccessMode = FILE_SHARE_READ):
         path = path.replace('/', '\\')
