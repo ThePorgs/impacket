@@ -11,7 +11,7 @@ env:
 jobs:
   lint:
     name: Check syntax errors and warnings
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     if:
       github.event_name == 'push' || github.event.pull_request.head.repo.full_name !=
       github.repository
@@ -50,11 +50,11 @@ jobs:
       matrix:
         python-version: ["3.9", "3.10","3.11","3.12","3.13"]
         experimental: [false]
-        os: [ubuntu-latest]
+        os: [ubuntu-24.04]
         include:
           - python-version: "3.14-dev"
             experimental: true
-            os: ubuntu-latest
+            os: ubuntu-24.04
     continue-on-error: ${{ matrix.experimental }}
 
     steps:
@@ -82,7 +82,7 @@ jobs:
   docker:
     name: Build docker image
     needs: lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     if:
       github.event_name == 'push' || github.event.pull_request.head.repo.full_name !=
       github.repository
