@@ -1926,7 +1926,11 @@ class SMB3:
                     written += len(data)
                     offset  += len(data)
                     callback(data)
-        except Exception:
+        except (nmb.NetBIOSTimeout, nmb.NetBIOSError, socket.error, OSError):
+            # A timed-out or truncated read can leave the TCP session unusable.
+            # Close it so the next call does not reuse a corrupted socket.
+            # SMB status errors (access denied, no such file, etc.) must not
+            # tear the session down.
             readFailed = True
             raise
         finally:
