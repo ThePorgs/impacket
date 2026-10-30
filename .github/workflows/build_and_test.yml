@@ -20,10 +20,10 @@ jobs:
       - name: Checkout Impacket
         uses: actions/checkout@v3
 
-      - name: Setup Python 3.8
+      - name: Setup Python 3.9
         uses: actions/setup-python@v4
         with:
-          python-version: 3.8
+          python-version: "3.9"
 
       - name: Install Python dependencies
         run: |
