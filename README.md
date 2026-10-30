@@ -5,7 +5,9 @@ Impacket (Exegol fork)
 
 This is [ThePorgs](https://github.com/ThePorgs/Impacket)'s fork of [fortra/impacket](https://github.com/fortra/impacket). CLI banners print `Impacket (Exegol fork)`. Exegol ships this next to upstream Impacket (`*-og.py` aliases).
 
-Upstream is slow to merge. This tree starts from `fortra/impacket` master and carries selected open PRs, one commit per PR, original authors kept. Conflicts were resolved here when needed.
+Upstream is slow to merge. This tree starts from `fortra/impacket` master and carries selected open PRs, one commit per PR, original authors kept. Conflicts were resolved here when needed. This fork is to be considered bleeding-edge, and AI was heavily used to select, merge and resolve conflicts. This means that this fork is to be considered less stable than origin.
+
+This forks is maintained for Exegol. Do not open feature PRs against Fortra here; open them upstream and they can be pulled on the next fork refresh.
 
 Base: [`40b1eb7a`](https://github.com/fortra/impacket/commit/40b1eb7a) (PKINIT client, fortra/impacket#2260).
 
@@ -77,139 +79,9 @@ Links go to the original Fortra PRs.
 * [fortra/impacket#1698](https://github.com/fortra/impacket/pull/1698) secretsdump `-inline` / `-restore` (ported onto current secretsdump)
 * [fortra/impacket#2336](https://github.com/fortra/impacket/pull/2336) Wait for RemoteRegistry instead of sleep(1)
 
-Not taken this run
-------------------
-
-* [fortra/impacket#2290](https://github.com/fortra/impacket/pull/2290) already in upstream master
-* [fortra/impacket#2350](https://github.com/fortra/impacket/pull/2350) redundant with #2296
-* [fortra/impacket#2157](https://github.com/fortra/impacket/pull/2157) cross-forest RBCD: would rewrite `getKerberosTGS` / S4U and undo #2324, #2192, #2317, #2303
-
 Upstream Impacket
 =================
 
 Copyright Fortra, LLC and its affiliated companies. All rights reserved.
 
 Impacket was originally created by [SecureAuth](https://www.secureauth.com/labs/open-source-tools/impacket), and now maintained by Fortra's Core Security.
-
-Impacket is a collection of Python classes for working with network
-protocols. Impacket is focused on providing low-level
-programmatic access to the packets and for some protocols (e.g.
-SMB1-3 and MSRPC) the protocol implementation itself.
-Packets can be constructed from scratch, as well as parsed from
-raw data, and the object-oriented API makes it simple to work with
-deep hierarchies of protocols. The library provides a set of tools
-as examples of what can be done within the context of this library.
-
-What protocols are featured?
-----------------------------
-
- * Ethernet, Linux "Cooked" capture.
- * IP, TCP, UDP, ICMP, IGMP, ARP.
- * IPv4 and IPv6 Support.
- * NMB and SMB1, SMB2 and SMB3 (high-level implementations).
- * MSRPC version 5, over different transports: TCP, SMB/TCP, SMB/NetBIOS and HTTP.
- * Plain, NTLM and Kerberos authentications, using password/hashes/tickets/keys.
- * Portions/full implementation of the following MSRPC interfaces: EPM, DTYPES, LSAD, LSAT, NRPC, RRP, SAMR, SRVS, WKST, SCMR, BKRP, DHCPM, EVEN6, MGMT, SASEC, TSCH, DCOM, WMI, OXABREF, NSPI, OXNSPI.
- * Portions of TDS (MSSQL) and LDAP protocol implementations.
-
-This fork
-=========
-
-Maintained for Exegol. Do not open feature PRs against Fortra here; open them upstream and they can be pulled on the next fork refresh.
-
-Table of Contents
-=================
-
-* [Getting Impacket](#getting-impacket)
-* [Setup](#setup)
-* [Testing](#testing)
-* [Licensing](#licensing)
-* [Disclaimer](#disclaimer)
-* [Contact Us](#contact-us)
-
-Getting Impacket
-================
-
-### This fork
-
-```
-python3 -m pipx install git+https://github.com/ThePorgs/Impacket.git
-```
-
-Or clone and `python3 -m pipx install .`
-
-### Upstream latest version
-
-* Impacket v0.13.1
-
-  [![Python versions](https://img.shields.io/pypi/pyversions/impacket.svg)](https://pypi.python.org/pypi/impacket/)
-
-[Current and past releases](https://github.com/fortra/impacket/releases)
-
-### Upstream development version
-
-* Impacket v0.14.0-dev (**[master branch](https://github.com/fortra/impacket/tree/master)**)
-
-Setup
-=====
-
-### Quick start
-
-> :information_source: We recommend using `pipx` over `pip` for system-wide installations.
-
-    python3 -m pipx install git+https://github.com/ThePorgs/Impacket.git
-
-### Docker Support
-
-Build Impacket's image:
-
-      $ docker build -t "impacket:latest" .
-
-Using Impacket's image:
-
-      $ docker run -it --rm "impacket:latest"
-
-Testing
-=======
-
-The library leverages the [pytest](https://docs.pytest.org/) framework for organizing
-and marking test cases, [tox](https://tox.readthedocs.io/) to automate the process of
-running them across supported Python versions, and [coverage](https://coverage.readthedocs.io/)
-to obtain coverage statistics.
-
-A [comprehensive testing guide](TESTING.md) is available.
-
-
-Licensing
-=========
-
-This software is provided under a slightly modified version of
-the Apache Software License. See the accompanying [LICENSE](LICENSE) file for
-more information.
-
-SMBv1 and NetBIOS support based on Pysmb by Michael Teo.
-
-Disclaimer
-==========
-
-The spirit of this Open Source initiative is to help security researchers,
-and the community, speed up research and educational activities related to
-the implementation of networking protocols and stacks.
-
-The information in this repository is for research and educational purposes
-and not meant to be used in production environments and/or as part
-of commercial products.
-
-If you desire to use this code or some part of it for your own uses, we
-recommend applying proper security development life cycle and secure coding
-practices, as well as generate and track the respective indicators of
-compromise according to your needs.
-
-
-## Contact Us
-
-For this fork: [ThePorgs/Impacket](https://github.com/ThePorgs/Impacket/issues).
-
-For general questions, bug reports, or feature requests against upstream Impacket, use [fortra/impacket](https://github.com/fortra/impacket/issues).
-
-If you believe you have discovered a security vulnerability in Impacket, follow the instructions in the [Security Policy](SECURITY.md).
