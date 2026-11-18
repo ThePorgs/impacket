@@ -544,31 +544,37 @@ if __name__ == '__main__':
        sys.exit(1)
     
     # Ensuring the correct target is set when performing SCCM policies attack
-    if options.sccm_policies is True and not options.target.rstrip('/').endswith("/ccm_system_windowsauth/request"):
-        logging.error("When performing SCCM policies attack, the Management Point authenticated device registration endpoint should be provided as target")
-        logging.error(f"For instance: {urlparse(options.target).scheme}://{urlparse(options.target).netloc}/ccm_system_windowsauth/request")
-        sys.exit(1)
+    if options.sccm_policies is True:
+        if options.target is None or not options.target.rstrip('/').endswith("/ccm_system_windowsauth/request"):
+            logging.error("When performing SCCM policies attack, the Management Point authenticated device registration endpoint should be provided as target")
+            if options.target is not None:
+                logging.error("For instance: %s://%s/ccm_system_windowsauth/request" % (urlparse(options.target).scheme, urlparse(options.target).netloc))
+            sys.exit(1)
 
     # Ensuring the correct target is set when performing SCCM DP attack
-    if options.sccm_dp is True and not options.target.rstrip('/').endswith("/sms_dp_smspkg$/Datalib"):
-        logging.error("When performing SCCM DP attack, the Distribution Point Datalib endpoint should be provided as target")
-        logging.error(f"For instance: {urlparse(options.target).scheme}://{urlparse(options.target).netloc}/sms_dp_smspkg$/Datalib")
-        sys.exit(1)
+    if options.sccm_dp is True:
+        if options.target is None or not options.target.rstrip('/').endswith("/sms_dp_smspkg$/Datalib"):
+            logging.error("When performing SCCM DP attack, the Distribution Point Datalib endpoint should be provided as target")
+            if options.target is not None:
+                logging.error("For instance: %s://%s/sms_dp_smspkg$/Datalib" % (urlparse(options.target).scheme, urlparse(options.target).netloc))
+            sys.exit(1)
 
     # Ensuring the correct parameters are set when performing SCCM Client Push attack
-    if options.sccm_clientpush is True and not options.target.rstrip('/').endswith("/ccm_system_windowsauth/request"):
-        logging.error("When performing SCCM Client Push attack, the Management Point authenticated device registration endpoint should be provided as target")
-        logging.error(f"For instance: {urlparse(options.target).scheme}://{urlparse(options.target).netloc}/ccm_system_windowsauth/request")
-        sys.exit(1)
-    elif options.sccm_clientpush_devicename == None:
-        logging.error(f"Error please specify a name for the device to be registered.")
-        sys.exit(1)
-    elif options.sccm_clientpush_site == None:
-        logging.error(f"Error please specify a valid SCCM site.")
-        sys.exit(1)
-    elif options.sccm_clientpush_ip == None:
-        logging.error(f"Error please specify an IP address to which Client Push Installation should be invoked to.")
-        sys.exit(1)
+    if options.sccm_clientpush is True:
+        if options.target is None or not options.target.rstrip('/').endswith("/ccm_system_windowsauth/request"):
+            logging.error("When performing SCCM Client Push attack, the Management Point authenticated device registration endpoint should be provided as target")
+            if options.target is not None:
+                logging.error("For instance: %s://%s/ccm_system_windowsauth/request" % (urlparse(options.target).scheme, urlparse(options.target).netloc))
+            sys.exit(1)
+        if options.sccm_clientpush_devicename is None:
+            logging.error("Error please specify a name for the device to be registered.")
+            sys.exit(1)
+        if options.sccm_clientpush_site is None:
+            logging.error("Error please specify a valid SCCM site.")
+            sys.exit(1)
+        if options.sccm_clientpush_ip is None:
+            logging.error("Error please specify an IP address to which Client Push Installation should be invoked to.")
+            sys.exit(1)
 
     # Init the example's logger theme
     logger.init(options.ts, options.debug)
