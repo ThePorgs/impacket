@@ -41,6 +41,7 @@ from impacket.ldap.ldapasn1 import Filter, Control, SimplePagedResultsControl, R
     SearchResultDone, LDAPMessage, AddRequest, ModifyRequest, ModifyDNRequest, DelRequest, ExtendedRequest
 from impacket.ntlm import getNTLMSSPType1, getNTLMSSPType3, VERSION, hmac_md5, NTLMAuthChallenge
 from impacket.spnego import SPNEGO_NegTokenInit, SPNEGO_NegTokenResp, SPNEGOCipher, TypesMech
+from impacket.tls import tls_server_end_point_channel_binding_from_digest
 
 try:
     import OpenSSL
@@ -307,20 +308,7 @@ class LDAPConnection:
                 digest = hashes.Hash(peer_certificate_hash_algorithm, default_backend())
             digest.update(der_cert)
             peer_cert_digest_bytes = digest.finalize()
-
-            channel_binding_struct = b''
-            initiator_address = b'\x00'*8
-            acceptor_address = b'\x00'*8
-
-            # https://datatracker.ietf.org/doc/html/rfc5929#section-4
-            application_data_raw = b'tls-server-end-point:' + peer_cert_digest_bytes
-            len_application_data = len(application_data_raw).to_bytes(4, byteorder='little', signed = False)
-            application_data = len_application_data
-            application_data += application_data_raw
-            channel_binding_struct += initiator_address
-            channel_binding_struct += acceptor_address
-            channel_binding_struct += application_data
-            self.channel_binding_value = md5(channel_binding_struct).digest()
+            self.channel_binding_value = tls_server_end_point_channel_binding_from_digest(peer_cert_digest_bytes)
 
     def startTLS(self):
         """Upgrade a plaintext LDAP connection (ldap://) to TLS using the StartTLS extended operation."""
