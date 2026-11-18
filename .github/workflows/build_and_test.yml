@@ -69,7 +69,9 @@ jobs:
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip wheel
-          python -m pip install tox tox-gh-actions -r requirements.txt -r requirements-test.txt
+          # tox>=4.31 dropped _PLACE_HOLDER; tox-gh-actions 3.5 still imports it.
+          # Python 3.9 already resolved to 4.30.3 and passed. Pin so 3.11+ match.
+          python -m pip install 'tox==4.30.3' tox-gh-actions -r requirements.txt -r requirements-test.txt
 
       - name: Run unit tests
         run: |
