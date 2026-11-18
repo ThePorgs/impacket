@@ -1928,19 +1928,23 @@ class SMB3:
                     written += len(data)
                     offset  += len(data)
                     callback(data)
-        except Exception:
-+            readFailed = True
-+            raise
+        except (nmb.NetBIOSTimeout, nmb.NetBIOSError, socket.error, OSError):
+            # A timed-out or truncated read can leave the TCP session unusable.
+            # Close it so the next call does not reuse a corrupted socket.
+            # SMB status errors (access denied, no such file, etc.) must not
+            # tear the session down.
+            readFailed = True
+            raise
         finally:
             if readFailed:
-+                try:
-+                    self._NetBIOSSession.close()
-+                except Exception:
-+                    pass
-+            else:
-+                if fileId is not None:
-+                    self.close(treeId, fileId)
-+                self.disconnectTree(treeId)
+                try:
+                    self._NetBIOSSession.close()
+                except Exception:
+                    pass
+            else:
+                if fileId is not None:
+                    self.close(treeId, fileId)
+                self.disconnectTree(treeId)
 
     def storeFile(self, shareName, path, callback, mode = FILE_OVERWRITE_IF, offset = 0, password = None, shareAccessMode = FILE_SHARE_READ):
         path = path.replace('/', '\\')
